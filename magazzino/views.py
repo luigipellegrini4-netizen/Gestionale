@@ -1641,3 +1641,9 @@ def gestione_produzione_semilavorato(request, pk):
             "conferma_form": conferma_form,
         },
     )
+
+def home(request):
+    return render(
+        request,
+        "magazzino/home.html",
+    )
