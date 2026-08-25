@@ -10,25 +10,47 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.1/ref/settings/
 """
 
+import os
 from pathlib import Path
 
-# Build paths inside the project like this: BASE_DIR / 'subdir'.
+
+# ============================================================
+# PERCORSI
+# ============================================================
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
-# Quick-start development settings - unsuitable for production
-# See https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/
+# ============================================================
+# AMBIENTE
+# ============================================================
 
-# SECURITY WARNING: keep the secret key used in production secret!
+IS_PYTHONANYWHERE = "PYTHONANYWHERE_DOMAIN" in os.environ
+
+
+# ============================================================
+# SICUREZZA
+# ============================================================
+
 SECRET_KEY = 'django-insecure-zy!8_lcm@$2=s3fy9)7+01s4q8vh!)azczla2qgnq&5v+e(uo%'
 
-# SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+if IS_PYTHONANYWHERE:
+    DEBUG = False
+    ALLOWED_HOSTS = [
+        ".pythonanywhere.com",
+    ]
+else:
+    DEBUG = True
+    ALLOWED_HOSTS = [
+        "127.0.0.1",
+        "localhost",
+        "192.168.1.178",
+    ]
 
-ALLOWED_HOSTS = []
 
-
-# Application definition
+# ============================================================
+# APPLICAZIONI
+# ============================================================
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -40,6 +62,11 @@ INSTALLED_APPS = [
     'magazzino',
 ]
 
+
+# ============================================================
+# MIDDLEWARE
+# ============================================================
+
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
@@ -50,7 +77,17 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
+
+# ============================================================
+# URL
+# ============================================================
+
 ROOT_URLCONF = 'gestionale.urls'
+
+
+# ============================================================
+# TEMPLATE
+# ============================================================
 
 TEMPLATES = [
     {
@@ -67,26 +104,44 @@ TEMPLATES = [
     },
 ]
 
+
+# ============================================================
+# WSGI
+# ============================================================
+
 WSGI_APPLICATION = 'gestionale.wsgi.application'
 
 
-# Database
-# https://docs.djangoproject.com/en/6.1/ref/settings/#databases
+# ============================================================
+# DATABASE
+# ============================================================
 
-DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.mysql",
-        "NAME": "gestionale",
-        "USER": "luigi",
-        "PASSWORD": "luigi",
-        "HOST": "127.0.0.1",
-        "PORT": "3306",
+if IS_PYTHONANYWHERE:
+
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": BASE_DIR / "db.sqlite3",
+        }
     }
-}
+
+else:
+
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.mysql",
+            "NAME": "gestionale",
+            "USER": "luigi",
+            "PASSWORD": "luigi",
+            "HOST": "127.0.0.1",
+            "PORT": "3306",
+        }
+    }
 
 
-# Password validation
-# https://docs.djangoproject.com/en/6.1/ref/settings/#auth-password-validators
+# ============================================================
+# VALIDAZIONE PASSWORD
+# ============================================================
 
 AUTH_PASSWORD_VALIDATORS = [
     {
@@ -104,26 +159,31 @@ AUTH_PASSWORD_VALIDATORS = [
 ]
 
 
-# Internationalization
-# https://docs.djangoproject.com/en/6.1/topics/i18n/
+# ============================================================
+# INTERNAZIONALIZZAZIONE
+# ============================================================
 
-LANGUAGE_CODE = 'en-us'
+LANGUAGE_CODE = 'it-it'
 
-TIME_ZONE = 'UTC'
+TIME_ZONE = 'Europe/Rome'
 
 USE_I18N = True
 
 USE_TZ = True
 
 
-# Static files (CSS, JavaScript, Images)
-# https://docs.djangoproject.com/en/6.1/howto/static-files/
+# ============================================================
+# FILE STATICI
+# ============================================================
 
 STATIC_URL = 'static/'
 
+STATIC_ROOT = BASE_DIR / 'staticfiles'
 
-# Email
-# https://docs.djangoproject.com/en/6.1/topics/email/#topic-email-configuration
+
+# ============================================================
+# EMAIL
+# ============================================================
 
 MAILERS = {
     'default': {
