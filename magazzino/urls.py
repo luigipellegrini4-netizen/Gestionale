@@ -85,6 +85,9 @@ urlpatterns = [
     path(
         "produzione/",
         views.elenco_produzioni,
+        {
+            "tipo": "produzione",
+        },
         name="elenco_produzioni",
     ),
 
@@ -108,7 +111,10 @@ urlpatterns = [
 
     path(
         "produzione-semilavorati/",
-        views.elenco_produzioni_semilavorato,
+        views.elenco_produzioni,
+        {
+            "tipo": "semilavorato",
+        },
         name="elenco_produzioni_semilavorato",
     ),
 

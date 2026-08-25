@@ -1,7 +1,7 @@
 {% extends "magazzino/base.html" %}
 
 {% block title %}
-Produzioni marmellate - Gestionale Marmellate
+{{ titolo }} - Gestionale Marmellate
 {% endblock %}
 
 {% block content %}
@@ -9,16 +9,16 @@ Produzioni marmellate - Gestionale Marmellate
 <div class="page-header">
 
     <div>
-        <h2>Produzioni marmellate</h2>
+        <h2>{{ titolo }}</h2>
 
         <p>
-            Produzioni di prodotto nudo aperte e confermate.
+            Produzioni aperte e confermate.
         </p>
     </div>
 
     <div>
         <a
-            href="{% url 'nuova_produzione' %}"
+            href="{% url nuova_produzione_url %}"
             class="btn"
         >
             Nuova produzione
@@ -86,7 +86,7 @@ Produzioni marmellate - Gestionale Marmellate
 
                         <td>
                             <a
-                                href="{% url 'gestione_produzione' produzione.pk %}"
+                                href="{% url gestione_url produzione.pk %}"
                             >
                                 {% if produzione.stato == "BOZZA" %}
                                     Gestisci

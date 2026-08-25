@@ -898,25 +898,59 @@ def elimina_riga_ricetta(request, pk):
 # PRODUZIONE MARMELLATE / PRODOTTO NUDO
 # ============================================================
 
-def elenco_produzioni(request):
-    produzioni = (
-        Produzione.objects
-        .select_related(
-            "articolo",
-            "lotto",
-            "ubicazione_destinazione",
+def elenco_produzioni(request, tipo="produzione"):
+
+    if tipo == "semilavorato":
+        produzioni = (
+            ProduzioneSemilavorato.objects
+            .select_related(
+                "articolo",
+                "lotto",
+                "ubicazione_destinazione",
+            )
+            .prefetch_related(
+                "prelievi",
+            )
+            .order_by(
+                "-data_produzione",
+                "-id",
+            )
         )
-        .order_by(
-            "-data_produzione",
-            "-id",
+
+        titolo = "Produzioni semilavorati"
+        nuova_produzione_url = "nuova_produzione_semilavorato"
+        gestione_url = "gestione_produzione_semilavorato"
+
+    else:
+        produzioni = (
+            Produzione.objects
+            .select_related(
+                "articolo",
+                "lotto",
+                "ubicazione_destinazione",
+            )
+            .prefetch_related(
+                "prelievi",
+            )
+            .order_by(
+                "-data_produzione",
+                "-id",
+            )
         )
-    )
+
+        titolo = "Produzioni marmellate"
+        nuova_produzione_url = "nuova_produzione"
+        gestione_url = "gestione_produzione"
 
     return render(
         request,
         "magazzino/elenco_produzioni.html",
         {
             "produzioni": produzioni,
+            "tipo": tipo,
+            "titolo": titolo,
+            "nuova_produzione_url": nuova_produzione_url,
+            "gestione_url": gestione_url,
         },
     )
 
@@ -1368,28 +1402,6 @@ def nuovo_inscatolamento(request):
 # ============================================================
 # PRODUZIONE SEMILAVORATI
 # ============================================================
-
-def elenco_produzioni_semilavorato(request):
-    produzioni = (
-        ProduzioneSemilavorato.objects
-        .select_related(
-            "articolo",
-            "lotto",
-            "ubicazione_destinazione",
-        )
-        .order_by(
-            "-data_produzione",
-            "-id",
-        )
-    )
-
-    return render(
-        request,
-        "magazzino/elenco_produzioni_semilavorato.html",
-        {
-            "produzioni": produzioni,
-        },
-    )
 
 
 def nuova_produzione_semilavorato(request):
