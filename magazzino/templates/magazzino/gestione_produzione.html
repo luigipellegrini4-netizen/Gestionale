@@ -1,0 +1,470 @@
+{% extends "magazzino/base.html" %}
+
+{% block title %}
+Produzione {{ produzione.articolo.codice }} - Gestionale Marmellate
+{% endblock %}
+
+{% block content %}
+
+<div class="page-header">
+
+    <div>
+
+        <h2>
+            Produzione
+            {{ produzione.articolo.codice }}
+        </h2>
+
+        <p>
+            {{ produzione.articolo.descrizione }}
+        </p>
+
+    </div>
+
+    <div>
+        <a
+            href="{% url 'elenco_produzioni' %}"
+            class="btn btn-secondary"
+        >
+            Elenco produzioni
+        </a>
+    </div>
+
+</div>
+
+
+<div class="card">
+
+    <h3>Dati produzione</h3>
+
+    <p>
+        <strong>Data produzione:</strong>
+        {{ produzione.data_produzione }}
+    </p>
+
+    <p>
+        <strong>Stato:</strong>
+        {{ produzione.get_stato_display }}
+    </p>
+
+    <p>
+        <strong>Lotto:</strong>
+
+        {% if produzione.lotto %}
+            {{ produzione.lotto.codice_lotto }}
+        {% else %}
+            Non ancora assegnato
+        {% endif %}
+    </p>
+
+    <p>
+        <strong>Quantità prodotta:</strong>
+
+        {% if produzione.quantita_prodotta != None %}
+            {{ produzione.quantita_prodotta }}
+            {{ produzione.articolo.unita_misura }}
+        {% else %}
+            Non ancora registrata
+        {% endif %}
+    </p>
+
+    {% if produzione.ubicazione_destinazione %}
+
+        <p>
+            <strong>Destinazione:</strong>
+            {{ produzione.ubicazione_destinazione.nome }}
+        </p>
+
+    {% endif %}
+
+    {% if produzione.note %}
+
+        <p>
+            <strong>Note:</strong>
+            {{ produzione.note }}
+        </p>
+
+    {% endif %}
+
+</div>
+
+
+{% if ricetta %}
+
+<div class="card">
+
+    <h3>
+        Ingredienti previsti
+    </h3>
+
+    <p>
+        Ricetta:
+        <strong>{{ ricetta.nome }}</strong>
+        -
+        versione {{ ricetta.versione }}
+    </p>
+
+    {% if ingredienti_ricetta %}
+
+        <table>
+
+            <thead>
+
+                <tr>
+                    <th>Articolo</th>
+                    <th>Quantità teorica</th>
+                    <th>Unità</th>
+                </tr>
+
+            </thead>
+
+            <tbody>
+
+                {% for riga in ingredienti_ricetta %}
+
+                    <tr>
+
+                        <td>
+                            {{ riga.articolo.codice }}
+                            -
+                            {{ riga.articolo.descrizione }}
+                        </td>
+
+                        <td>
+                            {{ riga.quantita }}
+                        </td>
+
+                        <td>
+                            {{ riga.articolo.unita_misura }}
+                        </td>
+
+                    </tr>
+
+                {% endfor %}
+
+            </tbody>
+
+        </table>
+
+    {% endif %}
+
+</div>
+
+{% endif %}
+
+
+<div class="card">
+
+    <h3>Prelievi registrati</h3>
+
+    {% if prelievi %}
+
+        <table>
+
+            <thead>
+
+                <tr>
+                    <th>Articolo</th>
+                    <th>Lotto</th>
+                    <th>Ubicazione origine</th>
+                    <th>Prelevato</th>
+                    <th>Residuo</th>
+                    <th>Unità</th>
+
+                    {% if produzione.stato == "BOZZA" %}
+                        <th>Registra residuo</th>
+                    {% endif %}
+                </tr>
+
+            </thead>
+
+            <tbody>
+
+                {% for prelievo in prelievi %}
+
+                    <tr>
+
+                        <td>
+                            {{ prelievo.lotto.articolo.codice }}
+                            -
+                            {{ prelievo.lotto.articolo.descrizione }}
+                        </td>
+
+                        <td>
+                            {{ prelievo.lotto.codice_lotto }}
+                        </td>
+
+                        <td>
+                            {{ prelievo.ubicazione_origine.nome }}
+                        </td>
+
+                        <td>
+                            {{ prelievo.quantita_prelevata }}
+                        </td>
+
+                        <td>
+
+                            {% if prelievo.quantita_residua != None %}
+                                {{ prelievo.quantita_residua }}
+                            {% else %}
+                                Da registrare
+                            {% endif %}
+
+                        </td>
+
+                        <td>
+                            {{ prelievo.lotto.articolo.unita_misura }}
+                        </td>
+
+
+                        {% if produzione.stato == "BOZZA" %}
+
+                            <td>
+
+                                {% if prelievo.quantita_residua == None %}
+
+                                    <form method="post">
+
+                                        {% csrf_token %}
+
+                                        <input
+                                            type="hidden"
+                                            name="azione"
+                                            value="registra_residuo"
+                                        >
+
+                                        <input
+                                            type="hidden"
+                                            name="prelievo_id"
+                                            value="{{ prelievo.pk }}"
+                                        >
+
+                                        <input
+                                            type="number"
+                                            name="quantita_residua"
+                                            min="0"
+                                            max="{{ prelievo.quantita_prelevata }}"
+                                            step="0.001"
+                                            required
+                                        >
+
+                                        <button
+                                            type="submit"
+                                            class="btn"
+                                        >
+                                            Registra
+                                        </button>
+
+                                    </form>
+
+                                {% else %}
+
+                                    Registrato
+
+                                {% endif %}
+
+                            </td>
+
+                        {% endif %}
+
+                    </tr>
+
+                {% endfor %}
+
+            </tbody>
+
+        </table>
+
+    {% else %}
+
+        <p>
+            Nessun prelievo ancora registrato.
+        </p>
+
+    {% endif %}
+
+</div>
+
+
+{% if produzione.stato == "BOZZA" %}
+
+<div class="card">
+
+    <h3>Aggiungi prelievo</h3>
+
+    <p>
+        Seleziona un ingrediente previsto dalla ricetta
+        oppure un materiale MOCA utilizzato nella produzione.
+        Il gestionale selezionerà automaticamente i lotti
+        secondo il criterio FEFO/FIFO dell'articolo.
+    </p>
+
+
+    <form method="post">
+
+        {% csrf_token %}
+
+        <input
+            type="hidden"
+            name="azione"
+            value="aggiungi_ingrediente"
+        >
+
+
+        {% if ingrediente_form.non_field_errors %}
+
+            <div class="alert alert-danger">
+                {{ ingrediente_form.non_field_errors }}
+            </div>
+
+        {% endif %}
+
+
+        <div class="form-group">
+
+            {{ ingrediente_form.articolo.label_tag }}
+            {{ ingrediente_form.articolo }}
+
+            {% if ingrediente_form.articolo.errors %}
+                <div class="form-error">
+                    {{ ingrediente_form.articolo.errors }}
+                </div>
+            {% endif %}
+
+        </div>
+
+
+        <div class="form-group">
+
+            {{ ingrediente_form.quantita_richiesta.label_tag }}
+            {{ ingrediente_form.quantita_richiesta }}
+
+            {% if ingrediente_form.quantita_richiesta.errors %}
+                <div class="form-error">
+                    {{ ingrediente_form.quantita_richiesta.errors }}
+                </div>
+            {% endif %}
+
+        </div>
+
+
+        <div class="form-actions">
+
+            <button
+                type="submit"
+                class="btn"
+            >
+                Registra prelievo
+            </button>
+
+        </div>
+
+    </form>
+
+</div>
+
+
+<div class="card">
+
+    <h3>Conferma produzione</h3>
+
+    <p>
+        Inserisci il numero effettivo di vasetti ottenuti.
+        Prima della conferma deve essere stato registrato
+        il residuo di ogni prelievo.
+    </p>
+
+
+    <form method="post">
+
+        {% csrf_token %}
+
+        <input
+            type="hidden"
+            name="azione"
+            value="conferma_produzione"
+        >
+
+
+        {% if conferma_form.non_field_errors %}
+
+            <div class="alert alert-danger">
+                {{ conferma_form.non_field_errors }}
+            </div>
+
+        {% endif %}
+
+
+        <div class="form-group">
+
+            {{ conferma_form.quantita_prodotta.label_tag }}
+            {{ conferma_form.quantita_prodotta }}
+
+            {% if conferma_form.quantita_prodotta.errors %}
+                <div class="form-error">
+                    {{ conferma_form.quantita_prodotta.errors }}
+                </div>
+            {% endif %}
+
+        </div>
+
+
+        <div class="form-group">
+
+            {{ conferma_form.note.label_tag }}
+            {{ conferma_form.note }}
+
+            {% if conferma_form.note.errors %}
+                <div class="form-error">
+                    {{ conferma_form.note.errors }}
+                </div>
+            {% endif %}
+
+        </div>
+
+
+        <div class="form-actions">
+
+            <button
+                type="submit"
+                class="btn"
+            >
+                Conferma produzione
+            </button>
+
+        </div>
+
+    </form>
+
+</div>
+
+{% else %}
+
+
+<div class="card">
+
+    <h3>Produzione conclusa</h3>
+
+    <p>
+        Sono stati prodotti
+        <strong>
+            {{ produzione.quantita_prodotta }}
+            {{ produzione.articolo.unita_misura }}
+        </strong>
+        del lotto
+        <strong>
+            {{ produzione.lotto.codice_lotto }}
+        </strong>.
+    </p>
+
+    <p>
+        Il prodotto nudo è disponibile nel
+        <strong>Magazzino packaging</strong>
+        per la successiva etichettatura.
+    </p>
+
+</div>
+
+{% endif %}
+
+{% endblock %}

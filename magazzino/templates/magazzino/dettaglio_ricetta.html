@@ -1,0 +1,193 @@
+{% extends "magazzino/base.html" %}
+
+{% block title %}
+{{ ricetta.nome }} - Gestionale Marmellate
+{% endblock %}
+
+{% block content %}
+
+<div class="page-header">
+
+    <div>
+        <h2>{{ ricetta.nome }}</h2>
+
+        <p>
+            {{ ricetta.articolo.codice }}
+            -
+            {{ ricetta.articolo.descrizione }}
+        </p>
+    </div>
+
+    <div class="page-actions">
+
+        <a
+            href="{% url 'modifica_ricetta' ricetta.pk %}"
+            class="btn"
+        >
+            Modifica ricetta
+        </a>
+
+        <a
+            href="{% url 'aggiungi_riga_ricetta' ricetta.pk %}"
+            class="btn"
+        >
+            + Aggiungi ingrediente
+        </a>
+
+    </div>
+
+</div>
+
+<div class="card">
+
+    <h3>Dati ricetta</h3>
+
+    <p>
+        <strong>Articolo:</strong>
+        {{ ricetta.articolo.codice }}
+        -
+        {{ ricetta.articolo.descrizione }}
+    </p>
+
+    <p>
+        <strong>Versione:</strong>
+        {{ ricetta.versione }}
+    </p>
+
+    <p>
+        <strong>Stato:</strong>
+
+        {% if ricetta.attiva %}
+            <span class="badge badge-success">
+                Attiva
+            </span>
+        {% else %}
+            <span class="badge badge-danger">
+                Non attiva
+            </span>
+        {% endif %}
+    </p>
+
+    {% if ricetta.note %}
+
+        <p>
+            <strong>Note:</strong>
+            {{ ricetta.note }}
+        </p>
+
+    {% endif %}
+
+</div>
+
+<div class="card">
+
+    <h3>Ingredienti</h3>
+
+    {% if ricetta.righe.all %}
+
+        <div class="table-container">
+
+            <table>
+
+                <thead>
+                    <tr>
+                        <th>Codice</th>
+                        <th>Ingrediente</th>
+                        <th>Quantità</th>
+                        <th>Unità</th>
+                        <th>Note</th>
+                        <th>Azioni</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+
+                    {% for riga in ricetta.righe.all %}
+
+                        <tr>
+
+                            <td>
+                                {{ riga.articolo.codice }}
+                            </td>
+
+                            <td>
+                                {{ riga.articolo.descrizione }}
+                            </td>
+
+                            <td>
+                                {{ riga.quantita }}
+                            </td>
+
+                            <td>
+                                {{ riga.articolo.unita_misura }}
+                            </td>
+
+                            <td>
+                                {{ riga.note }}
+                            </td>
+
+                            <td>
+
+                                <div class="page-actions">
+
+                                    <a
+                                        href="{% url 'modifica_riga_ricetta' riga.pk %}"
+                                        class="btn"
+                                    >
+                                        Modifica
+                                    </a>
+
+                                    <form
+                                        method="post"
+                                        action="{% url 'elimina_riga_ricetta' riga.pk %}"
+                                        style="display: inline; padding: 0; margin: 0; background: none;"
+                                    >
+
+                                        {% csrf_token %}
+
+                                        <button
+                                            type="submit"
+                                            class="btn btn-danger"
+                                            onclick="return confirm('Sei sicuro di voler eliminare questo ingrediente dalla ricetta?');"
+                                        >
+                                            Elimina
+                                        </button>
+
+                                    </form>
+
+                                </div>
+
+                            </td>
+
+                        </tr>
+
+                    {% endfor %}
+
+                </tbody>
+
+            </table>
+
+        </div>
+
+    {% else %}
+
+        <p>
+            Questa ricetta non contiene ancora ingredienti.
+        </p>
+
+    {% endif %}
+
+</div>
+
+<p>
+
+    <a
+        href="{% url 'elenco_ricette' %}"
+        class="btn"
+    >
+        ← Torna alle ricette
+    </a>
+
+</p>
+
+{% endblock %}

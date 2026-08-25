@@ -1,0 +1,105 @@
+{% extends "magazzino/base.html" %}
+
+{% block title %}
+Movimenti di magazzino - Gestionale Marmellate
+{% endblock %}
+
+{% block content %}
+
+<div class="page-header">
+    <div>
+        <h2>Movimenti di magazzino</h2>
+        <p>Storico completo delle operazioni effettuate in magazzino.</p>
+    </div>
+</div>
+
+<div class="table-container">
+
+    {% if movimenti %}
+
+        <table>
+
+            <thead>
+                <tr>
+                    <th>Data e ora</th>
+                    <th>Tipo</th>
+                    <th>Articolo</th>
+                    <th>Lotto</th>
+                    <th>Quantità</th>
+                    <th>Origine</th>
+                    <th>Destinazione</th>
+                    <th>Causale</th>
+                    <th>Note</th>
+                </tr>
+            </thead>
+
+            <tbody>
+
+                {% for movimento in movimenti %}
+
+                    <tr>
+
+                        <td>
+                            {{ movimento.data_ora|date:"d/m/Y H:i" }}
+                        </td>
+
+                        <td>
+                            <span class="badge">
+                                {{ movimento.get_tipo_display }}
+                            </span>
+                        </td>
+
+                        <td>
+                            {{ movimento.lotto.articolo.descrizione }}
+                        </td>
+
+                        <td>
+                            {{ movimento.lotto.codice_lotto }}
+                        </td>
+
+                        <td>
+                            {{ movimento.quantita }}
+                            {{ movimento.lotto.articolo.unita_misura }}
+                        </td>
+
+                        <td>
+                            {% if movimento.ubicazione_origine %}
+                                {{ movimento.ubicazione_origine.nome }}
+                            {% else %}
+                                —
+                            {% endif %}
+                        </td>
+
+                        <td>
+                            {% if movimento.ubicazione_destinazione %}
+                                {{ movimento.ubicazione_destinazione.nome }}
+                            {% else %}
+                                —
+                            {% endif %}
+                        </td>
+
+                        <td>
+                            {{ movimento.causale }}
+                        </td>
+
+                        <td>
+                            {{ movimento.note }}
+                        </td>
+
+                    </tr>
+
+                {% endfor %}
+
+            </tbody>
+
+        </table>
+
+    {% else %}
+
+        <p>Non sono presenti movimenti di magazzino.</p>
+
+    {% endif %}
+
+</div>
+
+{% endblock %}

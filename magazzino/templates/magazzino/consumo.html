@@ -1,0 +1,47 @@
+{% extends "magazzino/base.html" %}
+
+{% block title %}
+Consumo - Gestionale Marmellate
+{% endblock %}
+
+{% block content %}
+
+<div class="page-header">
+    <div>
+        <h2>Consumo materia prima</h2>
+        <p>Registra il consumo di una quantità da un lotto presente in magazzino.</p>
+    </div>
+</div>
+
+<div class="form-card">
+
+    {% if form.non_field_errors %}
+        {% for error in form.non_field_errors %}
+            <div class="message error">
+                {{ error }}
+            </div>
+        {% endfor %}
+    {% endif %}
+
+    <form method="post">
+        {% csrf_token %}
+
+        {{ form.as_p }}
+
+        <div class="form-actions">
+
+            <button type="submit" class="btn">
+                Registra consumo
+            </button>
+
+            <a href="{% url 'situazione_magazzino' %}" class="btn btn-secondary">
+                Situazione magazzino
+            </a>
+
+        </div>
+
+    </form>
+
+</div>
+
+{% endblock %}

@@ -1,0 +1,112 @@
+{% extends "magazzino/base.html" %}
+
+{% block title %}
+Ricette - Gestionale Marmellate
+{% endblock %}
+
+{% block content %}
+
+<div class="page-header">
+
+    <div>
+        <h2>Ricette</h2>
+        <p>Elenco delle ricette disponibili.</p>
+    </div>
+
+    <div class="page-actions">
+
+        <a
+            href="{% url 'nuova_ricetta' %}"
+            class="btn"
+        >
+            + Nuova ricetta
+        </a>
+
+    </div>
+
+</div>
+
+{% if ricette %}
+
+<div class="table-container">
+
+    <table>
+
+        <thead>
+            <tr>
+                <th>Articolo</th>
+                <th>Ricetta</th>
+                <th>Versione</th>
+                <th>Stato</th>
+                <th>Azioni</th>
+            </tr>
+        </thead>
+
+        <tbody>
+
+            {% for ricetta in ricette %}
+
+            <tr>
+
+                <td>
+                    {{ ricetta.articolo.codice }}
+                    -
+                    {{ ricetta.articolo.descrizione }}
+                </td>
+
+                <td>
+                    {{ ricetta.nome }}
+                </td>
+
+                <td>
+                    {{ ricetta.versione }}
+                </td>
+
+                <td>
+
+                    {% if ricetta.attiva %}
+                        <span class="badge badge-success">
+                            Attiva
+                        </span>
+                    {% else %}
+                        <span class="badge badge-danger">
+                            Non attiva
+                        </span>
+                    {% endif %}
+
+                </td>
+
+                <td>
+
+                    <a
+                        href="{% url 'dettaglio_ricetta' ricetta.pk %}"
+                        class="btn"
+                    >
+                        Dettaglio
+                    </a>
+
+                </td>
+
+            </tr>
+
+            {% endfor %}
+
+        </tbody>
+
+    </table>
+
+</div>
+
+{% else %}
+
+<div class="card">
+
+    <p>
+        Non ci sono ricette disponibili.
+    </p>
+
+</div>
+
+{% endif %}
+
+{% endblock %}

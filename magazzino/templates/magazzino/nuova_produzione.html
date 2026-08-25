@@ -1,0 +1,99 @@
+{% extends "magazzino/base.html" %}
+
+{% block title %}
+Nuova produzione - Gestionale Marmellate
+{% endblock %}
+
+{% block content %}
+
+<div class="page-header">
+    <div>
+        <h2>Nuova produzione marmellata</h2>
+
+        <p>
+            Apri una nuova produzione.
+            Le quantità effettivamente utilizzate verranno registrate
+            successivamente durante la lavorazione.
+        </p>
+    </div>
+</div>
+
+
+<div class="card">
+
+    <form method="post">
+
+        {% csrf_token %}
+
+        {% if form.non_field_errors %}
+            <div class="alert alert-danger">
+                {{ form.non_field_errors }}
+            </div>
+        {% endif %}
+
+
+        <div class="form-group">
+
+            {{ form.articolo.label_tag }}
+            {{ form.articolo }}
+
+            {% if form.articolo.errors %}
+                <div class="form-error">
+                    {{ form.articolo.errors }}
+                </div>
+            {% endif %}
+
+        </div>
+
+
+        <div class="form-group">
+
+            {{ form.data_produzione.label_tag }}
+            {{ form.data_produzione }}
+
+            {% if form.data_produzione.errors %}
+                <div class="form-error">
+                    {{ form.data_produzione.errors }}
+                </div>
+            {% endif %}
+
+        </div>
+
+
+        <div class="form-group">
+
+            {{ form.note.label_tag }}
+            {{ form.note }}
+
+            {% if form.note.errors %}
+                <div class="form-error">
+                    {{ form.note.errors }}
+                </div>
+            {% endif %}
+
+        </div>
+
+
+        <div class="form-actions">
+
+            <button
+                type="submit"
+                class="btn"
+            >
+                Apri produzione
+            </button>
+
+            <a
+                href="{% url 'elenco_produzioni' %}"
+                class="btn btn-secondary"
+            >
+                Elenco produzioni
+            </a>
+
+        </div>
+
+    </form>
+
+</div>
+
+{% endblock %}

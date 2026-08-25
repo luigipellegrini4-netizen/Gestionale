@@ -1,0 +1,242 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="{% static 'magazzino/style.css' %}">
+    <title>{% block title %}Gestionale Marmellate{% endblock %}</title>
+</head>
+<body>
+    <header class="site-header">
+        <div>
+            <h1>Gestionale</h1>
+        </div>
+
+        <div class="user-menu">
+            {% if user.is_authenticated %}
+                <span class="user-name">
+                    {{ user.username }}
+                </span>
+
+                <form method="post" action="{% url 'logout' %}">
+                    {% csrf_token %}
+
+                    <button type="submit" class="logout-link">
+                        Esci
+                    </button>
+                </form>
+            {% else %}
+                <a href="{% url 'login' %}" class="login-link">
+                    Accedi
+                </a>
+            {% endif %}
+        </div>
+    </header>
+
+    <div class="layout">
+
+        <nav class="sidebar">
+
+            <div class="menu-section">
+                <div class="menu-title">
+                    MAGAZZINO
+                </div>
+
+                <a href="{% url 'situazione_magazzino' %}">
+                    Situazione magazzino
+                </a>
+
+                <a href="{% url 'elenco_movimenti' %}">
+                    Movimenti
+                </a>
+
+                <a href="{% url 'elenco_articoli' %}">
+                    Articoli
+                </a>
+            </div>
+
+
+            <div class="menu-section">
+                <div class="menu-title">
+                    PRODUZIONE
+                </div>
+
+                <a href="{% url 'nuova_produzione_semilavorato' %}">
+                    Nuova produzione semilavorato
+                </a>
+
+                <a href="{% url 'elenco_produzioni_semilavorato' %}">
+                    Produzioni semilavorati
+                </a>
+
+                <a href="{% url 'nuova_produzione' %}">
+                    Nuova produzione
+                </a>
+
+                <a href="{% url 'nuovo_confezionamento' %}">
+                    Nuovo confezionamento
+                </a>
+
+                <a href="{% url 'nuovo_inscatolamento' %}">
+                    Nuovo inscatolamento
+                </a>
+
+                <a href="{% url 'elenco_ricette' %}">
+                    Ricette
+                </a>
+
+                <a href="{% url 'nuova_ricetta' %}">
+                    Nuova ricetta
+                </a>
+            </div>
+
+
+            <div class="menu-section">
+                <div class="menu-title">
+                    AMMINISTRAZIONE
+                </div>
+
+                <a href="/admin/">
+                    Amministrazione
+                </a>
+            </div>
+
+
+            <div class="menu-section">
+                <div class="menu-title">
+                    UTENTE
+                </div>
+
+                {% if user.is_authenticated %}
+
+                    <div class="user-info">
+                        👤 {{ user.username }}
+                    </div>
+
+                    <form method="post" action="{% url 'logout' %}">
+                        {% csrf_token %}
+
+                        <button type="submit" class="logout-link">
+                            Esci
+                        </button>
+                    </form>
+
+                {% else %}
+
+                    <a href="{% url 'login' %}">
+                        ⇥ Login
+                    </a>
+
+                {% endif %}
+            </div>
+
+        </nav>
+
+
+        <main>
+
+            {% if messages %}
+                {% for message in messages %}
+                    <div class="message {{ message.tags }}">
+                        {{ message }}
+                    </div>
+                {% endfor %}
+            {% endif %}
+
+            {% block content %}
+            {% endblock %}
+
+        </main>
+
+    </div>
+
+
+    <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+
+    <script>
+        document.addEventListener("DOMContentLoaded", function () {
+
+            const tabelle = document.querySelectorAll("table");
+
+            if (tabelle.length === 0) {
+                return;
+            }
+
+            const nomePagina = window.location.pathname
+                .split("/")
+                .filter(Boolean)
+                .pop()
+                .replace("elenco_", "")
+                .replaceAll("_", "-");
+
+            const pageActions = document.querySelector(".page-actions");
+
+            tabelle.forEach(function (tabella, indice) {
+
+                const pulsante = document.createElement("button");
+
+                let nomeTabella = "";
+                let elemento = tabella.previousElementSibling;
+
+                while (elemento) {
+
+                    if (elemento.tagName === "H2") {
+                        nomeTabella = elemento.textContent.trim();
+                        break;
+                    }
+
+                    elemento = elemento.previousElementSibling;
+                }
+
+                if (!nomeTabella) {
+                    nomeTabella = "Tabella " + (indice + 1);
+                }
+
+                pulsante.textContent = "📊 Excel - " + nomeTabella;
+                pulsante.className = "btn";
+
+                pulsante.addEventListener("click", function () {
+
+                    const workbook = XLSX.utils.table_to_book(tabella);
+
+                    const nomeTabellaFile = nomeTabella
+                        .toLowerCase()
+                        .replaceAll(" ", "-")
+                        .replaceAll("/", "-");
+
+                    const nomeFile =
+                        nomePagina +
+                        "-" +
+                        nomeTabellaFile +
+                        ".xlsx";
+
+                    XLSX.writeFile(
+                        workbook,
+                        nomeFile
+                    );
+                });
+
+                if (pageActions && tabelle.length === 1) {
+
+                    pageActions.appendChild(pulsante);
+
+                } else {
+
+                    const contenitore = document.createElement("div");
+
+                    contenitore.className = "page-actions";
+
+                    contenitore.appendChild(pulsante);
+
+                    tabella.parentNode.insertBefore(
+                        contenitore,
+                        tabella
+                    );
+                }
+            });
+        });
+    </script>
+
+</body>
+</html>

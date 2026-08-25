@@ -1,0 +1,52 @@
+{% extends "magazzino/base.html" %}
+
+{% block title %}
+Trasferimento - Gestionale Marmellate
+{% endblock %}
+
+{% block content %}
+
+<div class="page-header">
+    <div>
+        <h2>Trasferimento di magazzino</h2>
+        <p>Sposta una quantità di un lotto da un'ubicazione a un'altra.</p>
+    </div>
+</div>
+
+<div class="form-card">
+
+{% if form.non_field_errors %}
+
+    {% for error in form.non_field_errors %}
+
+        <div class="message error">
+            {{ error }}
+        </div>
+
+    {% endfor %}
+
+{% endif %}
+
+<form method="post">
+
+    {% csrf_token %}
+
+    {{ form.as_p }}
+
+    <div class="form-actions">
+
+        <button type="submit" class="btn">
+            Registra trasferimento
+        </button>
+
+        <a href="{% url 'situazione_magazzino' %}" class="btn btn-secondary">
+            Situazione magazzino
+        </a>
+
+    </div>
+
+</form>
+
+</div>
+
+{% endblock %}

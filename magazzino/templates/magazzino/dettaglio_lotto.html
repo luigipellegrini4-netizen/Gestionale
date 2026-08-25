@@ -1,0 +1,501 @@
+{% extends "magazzino/base.html" %}
+
+{% block title %}
+{{ lotto.codice_lotto }} - Dettaglio lotto
+{% endblock %}
+
+{% block content %}
+
+<div class="page-header">
+    <div>
+        <h2>Dettaglio lotto</h2>
+        <p>
+            {{ lotto.articolo.descrizione }}
+            — {{ lotto.codice_lotto }}
+        </p>
+    </div>
+</div>
+
+
+<div class="card">
+
+    <h3>Dati lotto</h3>
+
+    <div class="detail-grid">
+
+        <div>
+            <strong>Articolo</strong>
+            {{ lotto.articolo.descrizione }}
+        </div>
+
+        <div>
+            <strong>Codice lotto</strong>
+            {{ lotto.codice_lotto }}
+        </div>
+
+        <div>
+            <strong>Tipo</strong>
+            {{ lotto.tipo }}
+        </div>
+
+        <div>
+            <strong>Fornitore</strong>
+            {% if lotto.fornitore %}
+                {{ lotto.fornitore.ragione_sociale }}
+            {% else %}
+                —
+            {% endif %}
+        </div>
+
+        <div>
+            <strong>Data arrivo</strong>
+            {% if lotto.data_arrivo %}
+                {{ lotto.data_arrivo|date:"d/m/Y" }}
+            {% else %}
+                —
+            {% endif %}
+        </div>
+
+        <div>
+            <strong>Data produzione</strong>
+            {% if lotto.data_produzione %}
+                {{ lotto.data_produzione|date:"d/m/Y" }}
+            {% else %}
+                —
+            {% endif %}
+        </div>
+
+        <div>
+            <strong>Data scadenza</strong>
+            {% if lotto.data_scadenza %}
+                {{ lotto.data_scadenza|date:"d/m/Y" }}
+            {% else %}
+                —
+            {% endif %}
+        </div>
+
+        <div>
+            <strong>Quantità iniziale</strong>
+            {{ lotto.quantita_iniziale }}
+            {{ lotto.articolo.unita_misura }}
+        </div>
+
+    </div>
+
+    {% if lotto.note %}
+        <div style="margin-top: 20px;">
+            <strong>Note</strong>
+            <p>{{ lotto.note }}</p>
+        </div>
+    {% endif %}
+
+</div>
+
+
+{% if lotto.articolo.categoria == "PRODOTTO_FINITO" %}
+
+<div class="card">
+
+    <h3>Stato prodotto finito</h3>
+
+    <div class="detail-grid">
+
+        <div>
+            <strong>Giacenza totale</strong>
+            {{ quantita_totale }}
+            {{ lotto.articolo.unita_misura }}
+        </div>
+
+        <div>
+            <strong>Inscatolati</strong>
+            {{ quantita_inscatolata }}
+            {{ lotto.articolo.unita_misura }}
+        </div>
+
+        <div>
+            <strong>Sfusi</strong>
+            {{ quantita_sfusa }}
+            {{ lotto.articolo.unita_misura }}
+        </div>
+
+    </div>
+
+    {% if inscatolamenti %}
+
+        <h4 style="margin-top: 20px;">
+            Composizione imballi
+        </h4>
+
+        <div class="table-container">
+
+            <table>
+
+                <thead>
+                    <tr>
+                        <th>Data</th>
+                        <th>Imballo</th>
+                        <th>Pezzi per imballo</th>
+                        <th>Imballi</th>
+                        <th>Pezzi inscatolati</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+
+                    {% for inscatolamento in inscatolamenti %}
+
+                        <tr>
+
+                            <td>
+                                {{ inscatolamento.data_inscatolamento|date:"d/m/Y" }}
+                            </td>
+
+                            <td>
+                                {{ inscatolamento.lotto_imballo.articolo.codice }}
+                                -
+                                {{ inscatolamento.lotto_imballo.articolo.descrizione }}
+                            </td>
+
+                            <td>
+                                {{ inscatolamento.pezzi_per_imballo }}
+                            </td>
+
+                            <td>
+                                {{ inscatolamento.quantita_imballi }}
+                            </td>
+
+                            <td>
+                                {{ inscatolamento.quantita_prodotti }}
+                            </td>
+
+                        </tr>
+
+                    {% endfor %}
+
+                </tbody>
+
+            </table>
+
+        </div>
+
+    {% else %}
+
+        <p style="margin-top: 20px;">
+            Il lotto non contiene prodotti inscatolati.
+        </p>
+
+    {% endif %}
+
+</div>
+
+{% endif %}
+
+
+<div class="card">
+
+    <h3>Giacenze</h3>
+
+    {% if giacenze %}
+
+        <div class="table-container">
+
+            <table>
+
+                <thead>
+                    <tr>
+                        <th>Ubicazione</th>
+                        <th>Quantità</th>
+                        <th>Unità</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+
+                    {% for giacenza in giacenze %}
+
+                        <tr>
+
+                            <td>
+                                {{ giacenza.ubicazione.nome }}
+                            </td>
+
+                            <td>
+                                <strong>
+                                    {{ giacenza.quantita }}
+                                </strong>
+                            </td>
+
+                            <td>
+                                {{ lotto.articolo.unita_misura }}
+                            </td>
+
+                        </tr>
+
+                    {% endfor %}
+
+                </tbody>
+
+            </table>
+
+        </div>
+
+    {% else %}
+
+        <p>
+            Il lotto non ha attualmente giacenze positive.
+        </p>
+
+    {% endif %}
+
+</div>
+
+<div class="card">
+
+    <h3>Tracciabilità</h3>
+
+    <h4>A monte - Da quali lotti deriva</h4>
+
+    {% if tracciabilita_monte %}
+
+        <div class="table-container">
+
+            <table>
+
+                <thead>
+                    <tr>
+                        <th>Articolo</th>
+                        <th>Lotto</th>
+                        <th>Ubicazione origine</th>
+                        <th>Prelevato</th>
+                        <th>Residuo</th>
+                        <th>Utilizzato</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+
+                    {% for riga in tracciabilita_monte %}
+
+                        <tr>
+
+                            <td>
+                                {{ riga.lotto.articolo.codice }}
+                                -
+                                {{ riga.lotto.articolo.descrizione }}
+                            </td>
+
+                            <td>
+                                <a href="{% url 'dettaglio_lotto' riga.lotto.pk %}">
+                                    {{ riga.lotto.codice_lotto }}
+                                </a>
+                            </td>
+
+                            <td>
+                                {{ riga.ubicazione.nome }}
+                            </td>
+
+                            <td>
+                                {{ riga.quantita_prelevata }}
+                                {{ riga.lotto.articolo.unita_misura }}
+                            </td>
+
+                            <td>
+                                {{ riga.quantita_residua }}
+                                {{ riga.lotto.articolo.unita_misura }}
+                            </td>
+
+                            <td>
+                                <strong>
+                                    {{ riga.quantita_utilizzata }}
+                                    {{ riga.lotto.articolo.unita_misura }}
+                                </strong>
+                            </td>
+
+                        </tr>
+
+                    {% endfor %}
+
+                </tbody>
+
+            </table>
+
+        </div>
+
+    {% else %}
+
+        <p>
+            Questo lotto non deriva da altri lotti registrati.
+        </p>
+
+    {% endif %}
+
+
+    <h4 style="margin-top: 30px;">
+        A valle - Dove è stato utilizzato
+    </h4>
+
+    {% if tracciabilita_valle %}
+
+        <div class="table-container">
+
+            <table>
+
+                <thead>
+                    <tr>
+                        <th>Articolo prodotto</th>
+                        <th>Lotto prodotto</th>
+                        <th>Tipo produzione</th>
+                        <th>Quantità utilizzata</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+
+                    {% for riga in tracciabilita_valle %}
+
+                        <tr>
+
+                            <td>
+                                {{ riga.articolo.codice }}
+                                -
+                                {{ riga.articolo.descrizione }}
+                            </td>
+
+                            <td>
+                                <a href="{% url 'dettaglio_lotto' riga.lotto.pk %}">
+                                    {{ riga.lotto.codice_lotto }}
+                                </a>
+                            </td>
+
+                            <td>
+                                {{ riga.tipo_produzione }}
+                            </td>
+
+                            <td>
+                                <strong>
+                                    {{ riga.quantita_utilizzata }}
+                                    {{ lotto.articolo.unita_misura }}
+                                </strong>
+                            </td>
+
+                        </tr>
+
+                    {% endfor %}
+
+                </tbody>
+
+            </table>
+
+        </div>
+
+    {% else %}
+
+        <p>
+            Questo lotto non risulta utilizzato in altre produzioni.
+        </p>
+
+    {% endif %}
+
+</div>
+
+<div class="card">
+
+    <h3>Movimenti del lotto</h3>
+
+    {% if movimenti %}
+
+        <div class="table-container">
+
+            <table>
+
+                <thead>
+                    <tr>
+                        <th>Data e ora</th>
+                        <th>Tipo</th>
+                        <th>Quantità</th>
+                        <th>Origine</th>
+                        <th>Destinazione</th>
+                        <th>Causale</th>
+                        <th>Note</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+
+                    {% for movimento in movimenti %}
+
+                        <tr>
+
+                            <td>
+                                {{ movimento.data_ora|date:"d/m/Y H:i" }}
+                            </td>
+
+                            <td>
+                                <span class="badge">
+                                    {{ movimento.get_tipo_display }}
+                                </span>
+                            </td>
+
+                            <td>
+                                {{ movimento.quantita }}
+                                {{ lotto.articolo.unita_misura }}
+                            </td>
+
+                            <td>
+                                {% if movimento.ubicazione_origine %}
+                                    {{ movimento.ubicazione_origine.nome }}
+                                {% else %}
+                                    —
+                                {% endif %}
+                            </td>
+
+                            <td>
+                                {% if movimento.ubicazione_destinazione %}
+                                    {{ movimento.ubicazione_destinazione.nome }}
+                                {% else %}
+                                    —
+                                {% endif %}
+                            </td>
+
+                            <td>
+                                {{ movimento.causale }}
+                            </td>
+
+                            <td>
+                                {{ movimento.note }}
+                            </td>
+
+                        </tr>
+
+                    {% endfor %}
+
+                </tbody>
+
+            </table>
+
+        </div>
+
+    {% else %}
+
+        <p>
+            Non sono presenti movimenti per questo lotto.
+        </p>
+
+    {% endif %}
+
+</div>
+
+
+<div class="page-actions">
+
+    <a href="{% url 'situazione_magazzino' %}" class="btn">
+        Situazione magazzino
+    </a>
+
+    <a href="{% url 'elenco_movimenti' %}" class="btn btn-secondary">
+        Tutti i movimenti
+    </a>
+
+</div>
+
+{% endblock %}

@@ -1,0 +1,245 @@
+{% extends "magazzino/base.html" %}
+
+{% block title %}
+Produzione semilavorato
+{% endblock %}
+
+{% block content %}
+
+<h2>
+    Produzione semilavorato
+</h2>
+
+<div class="card">
+
+    <p>
+        <strong>Articolo:</strong>
+        {{ produzione.articolo.codice }} -
+        {{ produzione.articolo.descrizione }}
+    </p>
+
+    <p>
+        <strong>Data produzione:</strong>
+        {{ produzione.data_produzione }}
+    </p>
+
+    <p>
+        <strong>Stato:</strong>
+        {{ produzione.get_stato_display }}
+    </p>
+
+    {% if produzione.lotto %}
+        <p>
+            <strong>Lotto:</strong>
+            {{ produzione.lotto.codice_lotto }}
+        </p>
+    {% endif %}
+
+    {% if produzione.quantita_prodotta %}
+        <p>
+            <strong>Quantità prodotta:</strong>
+            {{ produzione.quantita_prodotta }}
+        </p>
+    {% endif %}
+
+    {% if produzione.ubicazione_destinazione %}
+        <p>
+            <strong>Destinazione:</strong>
+            {{ produzione.ubicazione_destinazione }}
+        </p>
+    {% endif %}
+
+</div>
+
+
+{% if produzione.stato == "BOZZA" %}
+
+<div class="card">
+
+    <h3>Aggiungi ingrediente</h3>
+
+    <p>
+        Inserisci l'articolo e la quantità da prelevare.
+        Il gestionale proporrà automaticamente i lotti
+        secondo il criterio FIFO o FEFO.
+    </p>
+
+    <form method="post">
+
+        {% csrf_token %}
+
+        {{ ingrediente_form.non_field_errors }}
+
+        <div class="form-group">
+            {{ ingrediente_form.articolo.label_tag }}
+            {{ ingrediente_form.articolo }}
+            {{ ingrediente_form.articolo.errors }}
+        </div>
+
+        <div class="form-group">
+            {{ ingrediente_form.quantita_richiesta.label_tag }}
+            {{ ingrediente_form.quantita_richiesta }}
+            {{ ingrediente_form.quantita_richiesta.errors }}
+        </div>
+
+        <button
+            type="submit"
+            name="azione"
+            value="aggiungi_ingrediente"
+        >
+            Aggiungi ingrediente
+        </button>
+
+    </form>
+
+</div>
+
+{% endif %}
+
+
+<div class="card">
+
+    <h3>Prelievi registrati</h3>
+
+    {% if prelievi %}
+
+        <table>
+
+            <thead>
+                <tr>
+                    <th>Articolo</th>
+                    <th>Lotto</th>
+                    <th>Ubicazione origine</th>
+                    <th>Prelevato</th>
+                    <th>Residuo</th>
+                </tr>
+            </thead>
+
+            <tbody>
+
+                {% for prelievo in prelievi %}
+
+                    <tr>
+                        <td>
+                            {{ prelievo.lotto.articolo.codice }}
+                            -
+                            {{ prelievo.lotto.articolo.descrizione }}
+                        </td>
+
+                        <td>
+                            {{ prelievo.lotto.codice_lotto }}
+                        </td>
+
+                        <td>
+                            {{ prelievo.ubicazione_origine }}
+                        </td>
+
+                        <td>
+                            {{ prelievo.quantita_prelevata }}
+                        </td>
+
+                        <td>
+
+                            {% if produzione.stato == "BOZZA" and prelievo.quantita_residua is None %}
+
+                                <form method="post">
+
+                                    {% csrf_token %}
+
+                                    <input
+                                        type="hidden"
+                                        name="prelievo_id"
+                                        value="{{ prelievo.pk }}"
+                                    >
+
+                                    <input
+                                        type="number"
+                                        name="quantita_residua"
+                                        min="0"
+                                        max="{{ prelievo.quantita_prelevata }}"
+                                        step="0.001"
+                                        value="0"
+                                        required
+                                    >
+
+                                    <button
+                                        type="submit"
+                                        name="azione"
+                                        value="registra_residuo"
+                                    >
+                                        Registra residuo
+                                    </button>
+
+                                </form>
+
+                            {% else %}
+
+                                {{ prelievo.quantita_residua }}
+
+                            {% endif %}
+
+                        </td>
+                    </tr>
+
+                {% endfor %}
+
+            </tbody>
+
+        </table>
+
+    {% else %}
+
+        <p>
+            Nessun prelievo registrato.
+        </p>
+
+    {% endif %}
+
+</div>
+
+
+{% if produzione.stato == "BOZZA" %}
+
+<div class="card">
+
+    <h3>Conferma produzione</h3>
+
+    <form method="post">
+
+        {% csrf_token %}
+
+        {{ conferma_form.non_field_errors }}
+
+                <div class="form-group">
+                    {{ conferma_form.quantita_prodotta.label_tag }}
+                    {{ conferma_form.quantita_prodotta }}
+                    {{ conferma_form.quantita_prodotta.errors }}
+                </div>
+
+                <div class="form-group">
+                    {{ conferma_form.ubicazione_destinazione.label_tag }}
+                    {{ conferma_form.ubicazione_destinazione }}
+                    {{ conferma_form.ubicazione_destinazione.errors }}
+                </div>
+
+                <div class="form-group">
+                    {{ conferma_form.note.label_tag }}
+                    {{ conferma_form.note }}
+                    {{ conferma_form.note.errors }}
+                </div>
+
+        <button
+            type="submit"
+            name="azione"
+            value="conferma_produzione"
+        >
+            Conferma produzione
+        </button>
+
+    </form>
+
+</div>
+
+{% endif %}
+
+{% endblock %}

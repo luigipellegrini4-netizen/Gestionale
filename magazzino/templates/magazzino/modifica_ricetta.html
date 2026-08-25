@@ -1,0 +1,64 @@
+{% extends "magazzino/base.html" %}
+
+{% block title %}
+Modifica ricetta - Gestionale Marmellate
+{% endblock %}
+
+{% block content %}
+
+<div class="page-header">
+
+    <div>
+        <h2>Modifica ricetta</h2>
+
+        <p>
+            {{ ricetta.articolo.codice }}
+            -
+            {{ ricetta.articolo.descrizione }}
+        </p>
+    </div>
+
+</div>
+
+<div class="card">
+
+    <h3>Dati ricetta</h3>
+
+    {% if form.non_field_errors %}
+
+        {% for error in form.non_field_errors %}
+
+            <p class="error">
+                {{ error }}
+            </p>
+
+        {% endfor %}
+
+    {% endif %}
+
+    <form method="post">
+
+        {% csrf_token %}
+
+        {{ form.as_p }}
+
+        <button type="submit" class="btn">
+            Salva modifiche
+        </button>
+
+    </form>
+
+</div>
+
+<p>
+
+    <a
+        href="{% url 'dettaglio_ricetta' ricetta.pk %}"
+        class="btn"
+    >
+        ← Annulla
+    </a>
+
+</p>
+
+{% endblock %}

@@ -1,0 +1,117 @@
+{% extends "magazzino/base.html" %}
+
+{% block title %}
+Produzioni marmellate - Gestionale Marmellate
+{% endblock %}
+
+{% block content %}
+
+<div class="page-header">
+
+    <div>
+        <h2>Produzioni marmellate</h2>
+
+        <p>
+            Produzioni di prodotto nudo aperte e confermate.
+        </p>
+    </div>
+
+    <div>
+        <a
+            href="{% url 'nuova_produzione' %}"
+            class="btn"
+        >
+            Nuova produzione
+        </a>
+    </div>
+
+</div>
+
+
+<div class="card">
+
+    {% if produzioni %}
+
+        <table>
+
+            <thead>
+
+                <tr>
+                    <th>Data</th>
+                    <th>Prodotto</th>
+                    <th>Lotto</th>
+                    <th>Quantità prodotta</th>
+                    <th>Stato</th>
+                    <th>Azioni</th>
+                </tr>
+
+            </thead>
+
+            <tbody>
+
+                {% for produzione in produzioni %}
+
+                    <tr>
+
+                        <td>
+                            {{ produzione.data_produzione }}
+                        </td>
+
+                        <td>
+                            {{ produzione.articolo.codice }}
+                            -
+                            {{ produzione.articolo.descrizione }}
+                        </td>
+
+                        <td>
+                            {% if produzione.lotto %}
+                                {{ produzione.lotto.codice_lotto }}
+                            {% else %}
+                                -
+                            {% endif %}
+                        </td>
+
+                        <td>
+                            {% if produzione.quantita_prodotta != None %}
+                                {{ produzione.quantita_prodotta }}
+                                {{ produzione.articolo.unita_misura }}
+                            {% else %}
+                                -
+                            {% endif %}
+                        </td>
+
+                        <td>
+                            {{ produzione.get_stato_display }}
+                        </td>
+
+                        <td>
+                            <a
+                                href="{% url 'gestione_produzione' produzione.pk %}"
+                            >
+                                {% if produzione.stato == "BOZZA" %}
+                                    Gestisci
+                                {% else %}
+                                    Dettaglio
+                                {% endif %}
+                            </a>
+                        </td>
+
+                    </tr>
+
+                {% endfor %}
+
+            </tbody>
+
+        </table>
+
+    {% else %}
+
+        <p>
+            Nessuna produzione registrata.
+        </p>
+
+    {% endif %}
+
+</div>
+
+{% endblock %}

@@ -1,0 +1,115 @@
+{% extends "magazzino/base.html" %}
+
+{% block title %}
+Nuovo confezionamento
+{% endblock %}
+
+{% block content %}
+
+<h2>Nuovo confezionamento</h2>
+
+{% if confezionamento_completato %}
+    <div class="card">
+        <h3>Confezionamento completato</h3>
+
+        <p>
+            <strong>Lotto origine:</strong>
+            {{ confezionamento.lotto_origine.codice_lotto }}
+        </p>
+
+        <p>
+            <strong>Prodotto finito:</strong>
+            {{ confezionamento.articolo_finito.codice }}
+            -
+            {{ confezionamento.articolo_finito.descrizione }}
+        </p>
+
+        <p>
+            <strong>Lotto finito:</strong>
+            {{ confezionamento.lotto_finito.codice_lotto }}
+        </p>
+
+        <p>
+            <strong>Quantità confezionata:</strong>
+            {{ confezionamento.quantita_confezionata }}
+        </p>
+
+        <p>
+            <strong>Data confezionamento:</strong>
+            {{ confezionamento.data_confezionamento }}
+        </p>
+    </div>
+{% endif %}
+
+<div class="card">
+
+    <form method="post">
+
+        {% csrf_token %}
+
+        {% if form.non_field_errors %}
+            <div class="form-errors">
+                {{ form.non_field_errors }}
+            </div>
+        {% endif %}
+
+        <div class="form-group">
+            {{ form.lotto_origine.label_tag }}
+            {{ form.lotto_origine }}
+            {{ form.lotto_origine.errors }}
+        </div>
+
+        <div class="form-group">
+            {{ form.quantita_confezionata.label_tag }}
+            {{ form.quantita_confezionata }}
+            {{ form.quantita_confezionata.errors }}
+        </div>
+
+        <hr>
+
+        <h3>Etichette</h3>
+
+        <div class="form-group">
+            {{ form.lotto_etichetta.label_tag }}
+            {{ form.lotto_etichetta }}
+            {{ form.lotto_etichetta.errors }}
+        </div>
+
+
+        <hr>
+
+        <hr>
+
+        <div class="form-group">
+            {{ form.ubicazione_origine.label_tag }}
+            {{ form.ubicazione_origine }}
+            {{ form.ubicazione_origine.errors }}
+        </div>
+
+        <div class="form-group">
+            {{ form.ubicazione_destinazione.label_tag }}
+            {{ form.ubicazione_destinazione }}
+            {{ form.ubicazione_destinazione.errors }}
+        </div>
+
+        <div class="form-group">
+            {{ form.data_confezionamento.label_tag }}
+            {{ form.data_confezionamento }}
+            {{ form.data_confezionamento.errors }}
+        </div>
+
+        <div class="form-group">
+            {{ form.note.label_tag }}
+            {{ form.note }}
+            {{ form.note.errors }}
+        </div>
+
+        <button type="submit">
+            Registra confezionamento
+        </button>
+
+    </form>
+
+</div>
+
+{% endblock %}

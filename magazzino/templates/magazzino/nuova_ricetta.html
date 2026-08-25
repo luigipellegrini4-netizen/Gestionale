@@ -1,0 +1,99 @@
+{% extends "magazzino/base.html" %}
+
+{% block title %}
+Nuova ricetta - Gestionale Marmellate
+{% endblock %}
+
+{% block content %}
+
+<div class="page-header">
+
+    <div>
+        <h2>Nuova ricetta</h2>
+
+        <p>
+            Crea una nuova ricetta per un prodotto finito.
+        </p>
+    </div>
+
+</div>
+
+<div class="form-card">
+
+    <h2>Dati ricetta</h2>
+
+    <p class="subtitle">
+        Inserisci i dati della nuova ricetta.
+    </p>
+
+    <form method="post">
+
+        {% csrf_token %}
+
+        {{ form.non_field_errors }}
+
+        <p>
+            {{ form.articolo.label_tag }}
+            {{ form.articolo }}
+
+            {% if form.articolo.errors %}
+                {{ form.articolo.errors }}
+            {% endif %}
+        </p>
+
+        <p>
+            {{ form.nome.label_tag }}
+            {{ form.nome }}
+
+            {% if form.nome.errors %}
+                {{ form.nome.errors }}
+            {% endif %}
+        </p>
+
+        <p>
+            {{ form.versione.label_tag }}
+            {{ form.versione }}
+
+            {% if form.versione.errors %}
+                {{ form.versione.errors }}
+            {% endif %}
+        </p>
+
+        <p>
+            {{ form.attiva.label_tag }}
+            {{ form.attiva }}
+
+            {% if form.attiva.errors %}
+                {{ form.attiva.errors }}
+            {% endif %}
+        </p>
+
+        <p>
+            {{ form.note.label_tag }}
+            {{ form.note }}
+
+            {% if form.note.errors %}
+                {{ form.note.errors }}
+            {% endif %}
+        </p>
+
+        <div class="form-actions">
+
+            <button type="submit" class="btn">
+                Salva ricetta
+            </button>
+
+            <a
+                href="{% url 'elenco_ricette' %}"
+                class="btn btn-secondary"
+            >
+                Annulla
+            </a>
+
+        </div>
+
+    </form>
+
+</div>
+
+{% endblock %}

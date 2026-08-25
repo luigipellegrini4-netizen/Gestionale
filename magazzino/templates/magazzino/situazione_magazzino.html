@@ -1,0 +1,125 @@
+{% extends "magazzino/base.html" %}
+
+{% block title %}
+Situazione magazzino - Gestionale Marmellate
+{% endblock %}
+
+{% block content %}
+
+<div class="page-header">
+    <div>
+        <h2>Situazione magazzino</h2>
+        <p>
+            Giacenze attualmente presenti nelle diverse ubicazioni.
+        </p>
+    </div>
+</div>
+
+<div class="table-container">
+
+    {% if giacenze %}
+
+        <table>
+
+            <thead>
+                <tr>
+                    <th>Articolo</th>
+                    <th>Lotto</th>
+                    <th>Ubicazione</th>
+                    <th>Quantità</th>
+                    <th>Unità</th>
+                    <th>Totale lotto</th>
+                    <th>Inscatolati</th>
+                    <th>Sfusi</th>
+                </tr>
+            </thead>
+
+            <tbody>
+
+                {% for giacenza in giacenze %}
+
+                    <tr>
+
+                        <td>
+                            {{ giacenza.lotto.articolo.descrizione }}
+                        </td>
+
+                        <td>
+                            <a href="{% url 'dettaglio_lotto' giacenza.lotto.pk %}">
+                                {{ giacenza.lotto.codice_lotto }}
+                            </a>
+                        </td>
+
+                        <td>
+                            {{ giacenza.ubicazione.nome }}
+                        </td>
+
+                        <td>
+                            <strong>
+                                {{ giacenza.quantita }}
+                            </strong>
+                        </td>
+
+                        <td>
+                            {{ giacenza.lotto.articolo.unita_misura }}
+                        </td>
+
+                        {% if giacenza.lotto.articolo.categoria == "PRODOTTO_FINITO" %}
+
+                            <td>
+                                <strong>
+                                    {{ giacenza.quantita_totale }}
+                                </strong>
+                            </td>
+
+                            <td>
+                                {{ giacenza.quantita_inscatolata }}
+                            </td>
+
+                            <td>
+                                {{ giacenza.quantita_sfusa }}
+                            </td>
+
+                        {% else %}
+
+                            <td>—</td>
+                            <td>—</td>
+                            <td>—</td>
+
+                        {% endif %}
+
+                    </tr>
+
+                {% endfor %}
+
+            </tbody>
+
+        </table>
+
+    {% else %}
+
+        <p>
+            Non ci sono giacenze disponibili.
+        </p>
+
+    {% endif %}
+
+</div>
+
+<div class="page-actions">
+
+    <a href="{% url 'nuovo_carico' %}" class="btn">
+        Nuovo carico
+    </a>
+
+    <a href="{% url 'trasferimento' %}" class="btn">
+        Trasferimento
+    </a>
+
+    <a href="{% url 'consumo' %}" class="btn">
+        Consumo (togliere?)
+    </a>
+
+</div>
+
+{% endblock %}

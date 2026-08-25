@@ -1,0 +1,318 @@
+{% extends "magazzino/base.html" %}
+
+{% block title %}
+{{ articolo.codice }} - Dettaglio articolo
+{% endblock %}
+
+{% block content %}
+
+<div class="page-header">
+
+    <div>
+        <h2>
+            {{ articolo.codice }} - {{ articolo.descrizione }}
+        </h2>
+
+        <p>
+            Dettaglio anagrafico e situazione dell'articolo.
+        </p>
+    </div>
+
+    <div class="page-actions">
+
+        <a
+            href="{% url 'modifica_articolo' articolo.pk %}"
+            class="btn"
+        >
+            Modifica articolo
+        </a>
+
+        <a
+            href="{% url 'elenco_articoli' %}"
+            class="btn btn-secondary"
+        >
+            Elenco articoli
+        </a>
+
+    </div>
+
+</div>
+
+
+<div class="card">
+
+    <h3>Dati articolo</h3>
+
+    <div class="detail-grid">
+
+        <div>
+            <strong>Codice</strong>
+            {{ articolo.codice }}
+        </div>
+
+        <div>
+            <strong>Descrizione</strong>
+            {{ articolo.descrizione }}
+        </div>
+
+        <div>
+            <strong>Categoria</strong>
+            {{ articolo.get_categoria_display }}
+        </div>
+
+        <div>
+            <strong>Unità di misura</strong>
+            {{ articolo.unita_misura }}
+        </div>
+
+        <div>
+            <strong>Scorta minima</strong>
+            {{ articolo.scorta_minima }}
+            {{ articolo.unita_misura }}
+        </div>
+
+        <div>
+            <strong>Criterio rotazione</strong>
+            {{ articolo.get_criterio_rotazione_display }}
+        </div>
+
+        <div>
+            <strong>Stato</strong>
+
+            {% if articolo.attivo %}
+                Attivo
+            {% else %}
+                Non attivo
+            {% endif %}
+        </div>
+
+        {% if articolo.tipo_packaging %}
+
+            <div>
+                <strong>Tipo packaging</strong>
+                {{ articolo.get_tipo_packaging_display }}
+            </div>
+
+        {% endif %}
+
+        {% if articolo.pezzi_per_imballo %}
+
+            <div>
+                <strong>Pezzi per imballo</strong>
+                {{ articolo.pezzi_per_imballo }}
+            </div>
+
+        {% endif %}
+
+        {% if articolo.prodotto_finito_collegato %}
+
+            <div>
+                <strong>Prodotto finito collegato</strong>
+                {{ articolo.prodotto_finito_collegato.codice }}
+                -
+                {{ articolo.prodotto_finito_collegato.descrizione }}
+            </div>
+
+        {% endif %}
+
+    </div>
+
+    {% if articolo.note %}
+
+        <div style="margin-top: 20px;">
+
+            <strong>Note</strong>
+
+            <p>
+                {{ articolo.note }}
+            </p>
+
+        </div>
+
+    {% endif %}
+
+</div>
+
+
+<div class="card">
+
+    <h3>Giacenza totale</h3>
+
+    <p style="font-size: 1.4rem;">
+
+        <strong>
+            {{ giacenza_totale }}
+            {{ articolo.unita_misura }}
+        </strong>
+
+    </p>
+
+</div>
+
+
+<div class="card">
+
+    <h3>Giacenze attuali</h3>
+
+    {% if giacenze %}
+
+        <div class="table-container">
+
+            <table>
+
+                <thead>
+
+                    <tr>
+                        <th>Lotto</th>
+                        <th>Ubicazione</th>
+                        <th>Quantità</th>
+                    </tr>
+
+                </thead>
+
+                <tbody>
+
+                    {% for giacenza in giacenze %}
+
+                        <tr>
+
+                            <td>
+
+                                <a href="{% url 'dettaglio_lotto' giacenza.lotto.pk %}">
+                                    {{ giacenza.lotto.codice_lotto }}
+                                </a>
+
+                            </td>
+
+                            <td>
+                                {{ giacenza.ubicazione.nome }}
+                            </td>
+
+                            <td>
+
+                                <strong>
+                                    {{ giacenza.quantita }}
+                                </strong>
+
+                                {{ articolo.unita_misura }}
+
+                            </td>
+
+                        </tr>
+
+                    {% endfor %}
+
+                </tbody>
+
+            </table>
+
+        </div>
+
+    {% else %}
+
+        <p>
+            Questo articolo non ha attualmente giacenze positive.
+        </p>
+
+    {% endif %}
+
+</div>
+
+
+<div class="card">
+
+    <h3>Lotti</h3>
+
+    {% if lotti %}
+
+        <div class="table-container">
+
+            <table>
+
+                <thead>
+
+                    <tr>
+                        <th>Lotto</th>
+                        <th>Tipo</th>
+                        <th>Data arrivo</th>
+                        <th>Data produzione</th>
+                        <th>Scadenza</th>
+                        <th>Quantità iniziale</th>
+                    </tr>
+
+                </thead>
+
+                <tbody>
+
+                    {% for lotto in lotti %}
+
+                        <tr>
+
+                            <td>
+
+                                <a href="{% url 'dettaglio_lotto' lotto.pk %}">
+                                    {{ lotto.codice_lotto }}
+                                </a>
+
+                            </td>
+
+                            <td>
+                                {{ lotto.get_tipo_display }}
+                            </td>
+
+                            <td>
+
+                                {% if lotto.data_arrivo %}
+                                    {{ lotto.data_arrivo|date:"d/m/Y" }}
+                                {% else %}
+                                    —
+                                {% endif %}
+
+                            </td>
+
+                            <td>
+
+                                {% if lotto.data_produzione %}
+                                    {{ lotto.data_produzione|date:"d/m/Y" }}
+                                {% else %}
+                                    —
+                                {% endif %}
+
+                            </td>
+
+                            <td>
+
+                                {% if lotto.data_scadenza %}
+                                    {{ lotto.data_scadenza|date:"d/m/Y" }}
+                                {% else %}
+                                    —
+                                {% endif %}
+
+                            </td>
+
+                            <td>
+                                {{ lotto.quantita_iniziale }}
+                                {{ articolo.unita_misura }}
+                            </td>
+
+                        </tr>
+
+                    {% endfor %}
+
+                </tbody>
+
+            </table>
+
+        </div>
+
+    {% else %}
+
+        <p>
+            Non sono ancora presenti lotti per questo articolo.
+        </p>
+
+    {% endif %}
+
+</div>
+
+{% endblock %}

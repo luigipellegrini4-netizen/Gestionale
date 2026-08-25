@@ -1,0 +1,123 @@
+{% extends "magazzino/base.html" %}
+
+{% block title %}
+Articoli - Gestionale Marmellate
+{% endblock %}
+
+{% block content %}
+
+<div class="page-header">
+
+    <div>
+        <h2>Articoli</h2>
+        <p>
+            Anagrafica degli articoli presenti nel gestionale.
+        </p>
+    </div>
+
+    <div class="page-actions">
+        <a href="{% url 'nuovo_articolo' %}" class="btn">
+            Nuovo articolo
+        </a>
+    </div>
+
+</div>
+
+
+<div class="table-container">
+
+    {% if articoli %}
+
+        <table>
+
+            <thead>
+                <tr>
+                    <th>Codice</th>
+                    <th>Articolo</th>
+                    <th>Categoria</th>
+                    <th>Unità</th>
+                    <th>Giacenza</th>
+                    <th>Stato</th>
+                    <th>Azioni</th>
+                </tr>
+            </thead>
+
+            <tbody>
+
+                {% for articolo in articoli %}
+
+                    <tr>
+
+                        <td>
+                            <strong>
+                                <a href="{% url 'dettaglio_articolo' articolo.pk %}">
+                                    {{ articolo.codice }}
+                                </a>
+                            </strong>
+                        </td>
+
+                        <td>
+                            {{ articolo.descrizione }}
+                        </td>
+
+                        <td>
+                            {{ articolo.get_categoria_display }}
+                        </td>
+
+                        <td>
+                            {{ articolo.unita_misura }}
+                        </td>
+
+                        <td>
+                            <strong>
+                                {{ articolo.giacenza_totale }}
+                            </strong>
+                        </td>
+
+                        <td>
+                            {% if articolo.attivo %}
+                                <span class="badge">
+                                    Attivo
+                                </span>
+                            {% else %}
+                                <span class="badge">
+                                    Non attivo
+                                </span>
+                            {% endif %}
+                        </td>
+
+                        <td>
+                            <a
+                                href="{% url 'dettaglio_articolo' articolo.pk %}"
+                                class="btn btn-secondary"
+                            >
+                                Dettaglio
+                            </a>
+
+                            <a
+                                href="{% url 'modifica_articolo' articolo.pk %}"
+                                class="btn btn-secondary"
+                            >
+                                Modifica
+                            </a>
+                        </td>
+
+                    </tr>
+
+                {% endfor %}
+
+            </tbody>
+
+        </table>
+
+    {% else %}
+
+        <p>
+            Non sono presenti articoli.
+        </p>
+
+    {% endif %}
+
+</div>
+
+{% endblock %}

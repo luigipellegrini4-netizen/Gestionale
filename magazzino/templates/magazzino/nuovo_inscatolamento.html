@@ -1,0 +1,135 @@
+{% extends "magazzino/base.html" %}
+
+{% block title %}
+Nuovo inscatolamento - Gestionale Marmellate
+{% endblock %}
+
+{% block content %}
+
+<div class="page-header">
+
+    <div>
+        <h2>Nuovo inscatolamento</h2>
+
+        <p>
+            Inserisci i prodotti finiti in scatole o cofanetti.
+        </p>
+    </div>
+
+</div>
+
+{% if inscatolamento_completato %}
+
+    <div class="card">
+
+        <h3>Inscatolamento completato</h3>
+
+        <p>
+            <strong>Lotto prodotto:</strong>
+            {{ inscatolamento.lotto_prodotto.codice_lotto }}
+        </p>
+
+        <p>
+            <strong>Prodotto:</strong>
+            {{ inscatolamento.lotto_prodotto.articolo.codice }}
+            -
+            {{ inscatolamento.lotto_prodotto.articolo.descrizione }}
+        </p>
+
+        <p>
+            <strong>Quantità inscatolata:</strong>
+            {{ inscatolamento.quantita_prodotti }} PZ
+        </p>
+
+        <p>
+            <strong>Imballo:</strong>
+            {{ inscatolamento.lotto_imballo.articolo.codice }}
+            -
+            {{ inscatolamento.lotto_imballo.articolo.descrizione }}
+        </p>
+
+        <p>
+            <strong>Pezzi per imballo:</strong>
+            {{ inscatolamento.pezzi_per_imballo }}
+        </p>
+
+        <p>
+            <strong>Imballi utilizzati:</strong>
+            {{ inscatolamento.quantita_imballi }}
+        </p>
+
+        <p>
+            <strong>Data:</strong>
+            {{ inscatolamento.data_inscatolamento }}
+        </p>
+
+    </div>
+
+{% endif %}
+
+<div class="card">
+
+    <form method="post">
+
+        {% csrf_token %}
+
+        {{ form.non_field_errors }}
+
+        <div class="form-group">
+            {{ form.lotto_prodotto.label_tag }}
+            {{ form.lotto_prodotto }}
+            {{ form.lotto_prodotto.errors }}
+        </div>
+
+        <div class="form-group">
+            {{ form.lotto_imballo.label_tag }}
+            {{ form.lotto_imballo }}
+            {{ form.lotto_imballo.errors }}
+        </div>
+
+        <div class="form-group">
+            {{ form.quantita_prodotti.label_tag }}
+            {{ form.quantita_prodotti }}
+            {{ form.quantita_prodotti.errors }}
+        </div>
+
+        <div class="form-group">
+            {{ form.ubicazione_prodotto.label_tag }}
+            {{ form.ubicazione_prodotto }}
+            {{ form.ubicazione_prodotto.errors }}
+        </div>
+
+        <div class="form-group">
+            {{ form.ubicazione_imballo.label_tag }}
+            {{ form.ubicazione_imballo }}
+            {{ form.ubicazione_imballo.errors }}
+        </div>
+
+        <div class="form-group">
+            {{ form.data_inscatolamento.label_tag }}
+            {{ form.data_inscatolamento }}
+            {{ form.data_inscatolamento.errors }}
+        </div>
+
+        <div class="form-group">
+            {{ form.note.label_tag }}
+            {{ form.note }}
+            {{ form.note.errors }}
+        </div>
+
+        <div class="page-actions">
+
+            <button
+                type="submit"
+                class="btn"
+            >
+                Registra inscatolamento
+            </button>
+
+        </div>
+
+    </form>
+
+</div>
+
+{% endblock %}

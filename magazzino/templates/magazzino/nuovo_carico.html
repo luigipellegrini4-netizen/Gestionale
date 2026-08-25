@@ -1,0 +1,45 @@
+{% extends "magazzino/base.html" %}
+
+{% block title %}
+Nuovo carico - Gestionale Marmellate
+{% endblock %}
+
+{% block content %}
+
+<div class="page-header">
+    <div>
+        <h2>Nuovo carico</h2>
+        <p>Registra l'ingresso di un nuovo lotto in magazzino.</p>
+    </div>
+</div>
+
+<div class="form-card">
+
+    {% if form.non_field_errors %}
+        {% for error in form.non_field_errors %}
+            <div class="message error">
+                {{ error }}
+            </div>
+        {% endfor %}
+    {% endif %}
+
+    <form method="post">
+        {% csrf_token %}
+
+        {{ form.as_p }}
+
+        <div class="form-actions">
+            <button type="submit" class="btn">
+                Registra carico
+            </button>
+
+            <a href="{% url 'situazione_magazzino' %}" class="btn btn-secondary">
+                Situazione magazzino
+            </a>
+        </div>
+
+    </form>
+
+</div>
+
+{% endblock %}

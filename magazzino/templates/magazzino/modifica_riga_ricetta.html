@@ -1,0 +1,86 @@
+{% extends "magazzino/base.html" %}
+
+{% block title %}
+Modifica ingrediente - {{ ricetta.nome }}
+{% endblock %}
+
+{% block content %}
+
+<div class="page-header">
+    <div>
+        <h2>Modifica ingrediente</h2>
+
+        <p>
+            Ricetta:
+            <strong>{{ ricetta.nome }}</strong>
+        </p>
+
+        <p>
+            {{ ricetta.articolo.codice }}
+            -
+            {{ ricetta.articolo.descrizione }}
+        </p>
+    </div>
+</div>
+
+<div class="form-card">
+
+    <h2>Modifica ingrediente</h2>
+
+    <p class="subtitle">
+        Modifica i dati dell'ingrediente selezionato.
+    </p>
+
+    <form method="post">
+
+        {% csrf_token %}
+
+        {{ form.non_field_errors }}
+
+        <p>
+            {{ form.articolo.label_tag }}
+            {{ form.articolo }}
+
+            {% if form.articolo.errors %}
+                {{ form.articolo.errors }}
+            {% endif %}
+        </p>
+
+        <p>
+            {{ form.quantita.label_tag }}
+            {{ form.quantita }}
+
+            {% if form.quantita.errors %}
+                {{ form.quantita.errors }}
+            {% endif %}
+        </p>
+
+        <p>
+            {{ form.note.label_tag }}
+            {{ form.note }}
+
+            {% if form.note.errors %}
+                {{ form.note.errors }}
+            {% endif %}
+        </p>
+
+        <div class="form-actions">
+
+            <button type="submit" class="btn">
+                Salva modifiche
+            </button>
+
+            <a
+                href="{% url 'dettaglio_ricetta' ricetta.pk %}"
+                class="btn btn-secondary"
+            >
+                Annulla
+            </a>
+
+        </div>
+
+    </form>
+
+</div>
+
+{% endblock %}
