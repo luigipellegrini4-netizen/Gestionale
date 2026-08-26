@@ -111,7 +111,7 @@ Produzione semilavorato
                     <th>Lotto</th>
                     <th>Ubicazione origine</th>
                     <th>Prelevato</th>
-                    <th>Residuo</th>
+                    <th>Scarto</th>
                 </tr>
             </thead>
 
@@ -120,6 +120,7 @@ Produzione semilavorato
                 {% for prelievo in prelievi %}
 
                     <tr>
+
                         <td>
                             {{ prelievo.lotto.articolo.codice }}
                             -
@@ -140,7 +141,7 @@ Produzione semilavorato
 
                         <td>
 
-                            {% if produzione.stato == "BOZZA" and prelievo.quantita_residua is None %}
+                            {% if produzione.stato == "BOZZA" and prelievo.quantita_scarto is None %}
 
                                 <form method="post">
 
@@ -154,7 +155,7 @@ Produzione semilavorato
 
                                     <input
                                         type="number"
-                                        name="quantita_residua"
+                                        name="quantita_scarto"
                                         min="0"
                                         max="{{ prelievo.quantita_prelevata }}"
                                         step="0.001"
@@ -165,20 +166,21 @@ Produzione semilavorato
                                     <button
                                         type="submit"
                                         name="azione"
-                                        value="registra_residuo"
+                                        value="registra_scarto"
                                     >
-                                        Registra residuo
+                                        Registra scarto
                                     </button>
 
                                 </form>
 
                             {% else %}
 
-                                {{ prelievo.quantita_residua }}
+                                {{ prelievo.quantita_scarto }}
 
                             {% endif %}
 
                         </td>
+
                     </tr>
 
                 {% endfor %}
@@ -204,29 +206,35 @@ Produzione semilavorato
 
     <h3>Conferma produzione</h3>
 
+    <p>
+        Prima di confermare la produzione è necessario
+        registrare lo scarto di tutti i prelievi,
+        anche quando lo scarto è pari a zero.
+    </p>
+
     <form method="post">
 
         {% csrf_token %}
 
         {{ conferma_form.non_field_errors }}
 
-                <div class="form-group">
-                    {{ conferma_form.quantita_prodotta.label_tag }}
-                    {{ conferma_form.quantita_prodotta }}
-                    {{ conferma_form.quantita_prodotta.errors }}
-                </div>
+        <div class="form-group">
+            {{ conferma_form.quantita_prodotta.label_tag }}
+            {{ conferma_form.quantita_prodotta }}
+            {{ conferma_form.quantita_prodotta.errors }}
+        </div>
 
-                <div class="form-group">
-                    {{ conferma_form.ubicazione_destinazione.label_tag }}
-                    {{ conferma_form.ubicazione_destinazione }}
-                    {{ conferma_form.ubicazione_destinazione.errors }}
-                </div>
+        <div class="form-group">
+            {{ conferma_form.ubicazione_destinazione.label_tag }}
+            {{ conferma_form.ubicazione_destinazione }}
+            {{ conferma_form.ubicazione_destinazione.errors }}
+        </div>
 
-                <div class="form-group">
-                    {{ conferma_form.note.label_tag }}
-                    {{ conferma_form.note }}
-                    {{ conferma_form.note.errors }}
-                </div>
+        <div class="form-group">
+            {{ conferma_form.note.label_tag }}
+            {{ conferma_form.note }}
+            {{ conferma_form.note.errors }}
+        </div>
 
         <button
             type="submit"

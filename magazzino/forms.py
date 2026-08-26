@@ -237,12 +237,14 @@ class RigaRicettaForm(forms.ModelForm):
         fields = [
             "articolo",
             "quantita",
+            "ingrediente_prodotto",
             "note",
         ]
 
         labels = {
-            "articolo": "Ingrediente",
+            "articolo": "Ingrediente / materiale",
             "quantita": "Quantità",
+            "ingrediente_prodotto": "Entra nel prodotto",
             "note": "Note",
         }
 
@@ -266,12 +268,8 @@ class RigaRicettaForm(forms.ModelForm):
         self.fields["articolo"].queryset = (
             Articolo.objects.filter(
                 attivo=True,
-                categoria__in=[
-                    Articolo.Categoria.MATERIA_PRIMA,
-                    Articolo.Categoria.MOCA,
-                    Articolo.Categoria.SEMILAVORATO,
-                ],
             ).order_by(
+                "categoria",
                 "codice",
             )
         )
@@ -367,18 +365,24 @@ class IngredienteProduzioneForm(forms.Form):
         )
 
 
-class ResiduoProduzioneForm(forms.Form):
+class ScartoProduzioneForm(forms.Form):
 
-    quantita_residua = forms.DecimalField(
+    quantita_scarto = forms.DecimalField(
         max_digits=12,
-        decimal_places=3,
-        min_value=0,
-        label="Residuo",
+        decimal_places=6,
+        min_value=Decimal("0"),
+        label="Scarto",
+        widget=forms.NumberInput(
+            attrs={
+                "step": "0.000001",
+                "min": "0",
+            },
+        ),
     )
 
     note = forms.CharField(
         required=False,
-        label="Note",
+        label="Note scarto",
         widget=forms.Textarea(
             attrs={
                 "rows": 2,
@@ -386,11 +390,16 @@ class ResiduoProduzioneForm(forms.Form):
         ),
     )
 
-    def __init__(self, *args, prelievo=None, **kwargs):
+    def __init__(
+        self,
+        *args,
+        prelievo=None,
+        **kwargs,
+    ):
         super().__init__(*args, **kwargs)
 
         if prelievo is not None:
-            self.fields["quantita_residua"].max_value = (
+            self.fields["quantita_scarto"].max_value = (
                 prelievo.quantita_prelevata
             )
 
@@ -674,6 +683,44 @@ class IngredienteSemilavoratoForm(forms.Form):
             )
         )
 
+
+class ScartoProduzioneSemilavoratoForm(forms.Form):
+
+    quantita_scarto = forms.DecimalField(
+        max_digits=12,
+        decimal_places=6,
+        min_value=Decimal("0"),
+        label="Scarto",
+        widget=forms.NumberInput(
+            attrs={
+                "step": "0.000001",
+                "min": "0",
+            },
+        ),
+    )
+
+    note = forms.CharField(
+        required=False,
+        label="Note scarto",
+        widget=forms.Textarea(
+            attrs={
+                "rows": 2,
+            },
+        ),
+    )
+
+    def __init__(
+        self,
+        *args,
+        prelievo=None,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+
+        if prelievo is not None:
+            self.fields["quantita_scarto"].max_value = (
+                prelievo.quantita_prelevata
+            )
 
 class ConfermaProduzioneSemilavoratoForm(forms.Form):
 

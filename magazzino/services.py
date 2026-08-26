@@ -368,7 +368,7 @@ def registra_prelievi_produzione(
             lotto=giacenza.lotto,
             ubicazione_origine=giacenza.ubicazione,
             quantita_prelevata=quantita_prelevata,
-            quantita_residua=None,
+            quantita_scarto=None,
             note=note,
         )
 
@@ -378,76 +378,53 @@ def registra_prelievi_produzione(
 
 
 @transaction.atomic
-def registra_residuo_prelievo_produzione(
+def registra_scarto_prelievo_produzione(
     prelievo,
-    quantita_residua,
+    quantita_scarto,
     note="",
 ):
     if not isinstance(prelievo, PrelievoProduzione):
-        raise ValueError("Il prelievo non è valido.")
+        raise ValueError(
+            "Il prelievo non è valido."
+        )
 
     if prelievo.produzione.stato != Produzione.Stato.BOZZA:
         raise ValueError(
-            "Il residuo può essere registrato solo "
+            "Lo scarto può essere registrato solo "
             "per una produzione in bozza."
         )
 
-    quantita_residua = Decimal(str(quantita_residua))
+    quantita_scarto = Decimal(
+        str(quantita_scarto)
+    )
 
-    if quantita_residua < 0:
+    if quantita_scarto < 0:
         raise ValueError(
-            "La quantità residua non può essere negativa."
+            "La quantità di scarto non può essere negativa."
         )
 
-    if quantita_residua > prelievo.quantita_prelevata:
+    if quantita_scarto > prelievo.quantita_prelevata:
         raise ValueError(
-            "La quantità residua non può essere maggiore "
+            "La quantità di scarto non può essere maggiore "
             "della quantità prelevata."
         )
 
-    if prelievo.quantita_residua is not None:
+    if prelievo.quantita_scarto is not None:
         raise ValueError(
-            "Il residuo di questo prelievo è già stato registrato."
+            "Lo scarto di questo prelievo è già stato registrato."
         )
 
-    ubicazione_produzione = (
-        Ubicazione.objects
-        .filter(
-            tipo_magazzino=Ubicazione.TipoMagazzino.PRODUZIONE,
-            attiva=True,
-        )
-        .order_by("id")
-        .first()
+    prelievo.quantita_scarto = quantita_scarto
+
+    if note:
+        prelievo.note = note
+
+    prelievo.save(
+        update_fields=[
+            "quantita_scarto",
+            "note",
+        ]
     )
-
-    if ubicazione_produzione is None:
-        raise ValueError(
-            "Non esiste un'ubicazione attiva "
-            "per il Magazzino Produzione."
-        )
-
-    prelievo.quantita_residua = quantita_residua
-    prelievo.save(update_fields=["quantita_residua"])
-
-    if quantita_residua > 0:
-        giacenza, _ = Giacenza.objects.get_or_create(
-            lotto=prelievo.lotto,
-            ubicazione=ubicazione_produzione,
-            defaults={"quantita": Decimal("0")},
-        )
-
-        giacenza.quantita += quantita_residua
-        giacenza.save(update_fields=["quantita"])
-
-        Movimento.objects.create(
-            tipo=Movimento.Tipo.TRASFERIMENTO,
-            lotto=prelievo.lotto,
-            quantita=quantita_residua,
-            ubicazione_origine=None,
-            ubicazione_destinazione=ubicazione_produzione,
-            causale="Residuo produzione marmellata",
-            note=note,
-        )
 
     return prelievo
 
@@ -482,14 +459,14 @@ def conferma_produzione(
             "Non sono stati registrati prelievi per questa produzione."
         )
 
-    residui_mancanti = produzione.prelievi.filter(
-        quantita_residua__isnull=True,
+    scarti_mancanti = produzione.prelievi.filter(
+        quantita_scarto__isnull=True,
     ).exists()
 
-    if residui_mancanti:
+    if scarti_mancanti:
         raise ValueError(
             "Prima di confermare la produzione devi registrare "
-            "il residuo di tutti i prelievi."
+            "lo scarto di tutti i prelievi."
         )
 
     ricetta = (
@@ -513,7 +490,7 @@ def conferma_produzione(
     for prelievo in prelievi:
         quantita_utilizzata = (
             prelievo.quantita_prelevata
-            - prelievo.quantita_residua
+            - prelievo.quantita_scarto
         )
         articolo_id = prelievo.lotto.articolo_id
         utilizzo_per_articolo[articolo_id] = (
@@ -644,9 +621,9 @@ def registra_produzione(
             note=note,
         )
         for prelievo in prelievi:
-            registra_residuo_prelievo_produzione(
+            registra_scarto_prelievo_produzione(
                 prelievo=prelievo,
-                quantita_residua=Decimal("0"),
+                quantita_scarto=Decimal("0"),
                 note=note,
             )
 
@@ -1221,7 +1198,7 @@ def registra_prelievi_semilavorato(
             lotto=giacenza.lotto,
             ubicazione_origine=giacenza.ubicazione,
             quantita_prelevata=quantita_prelevata,
-            quantita_residua=None,
+            quantita_scarto=None,
             note=note,
         )
 
@@ -1229,13 +1206,17 @@ def registra_prelievi_semilavorato(
 
     return prelievi
 
+
 @transaction.atomic
-def registra_residuo_prelievo_semilavorato(
+def registra_scarto_prelievo_semilavorato(
     prelievo,
-    quantita_residua,
+    quantita_scarto,
     note="",
 ):
-    from .models import PrelievoProduzioneSemilavorato
+    from .models import (
+        PrelievoProduzioneSemilavorato,
+        ProduzioneSemilavorato,
+    )
 
     if not isinstance(
         prelievo,
@@ -1245,72 +1226,49 @@ def registra_residuo_prelievo_semilavorato(
             "Il prelievo non è valido."
         )
 
-    quantita_residua = Decimal(
-        str(quantita_residua)
-    )
-
-    if quantita_residua < 0:
+    if (
+        prelievo.produzione.stato
+        != ProduzioneSemilavorato.Stato.BOZZA
+    ):
         raise ValueError(
-            "La quantità residua non può essere negativa."
+            "Lo scarto può essere registrato solo "
+            "per una produzione in bozza."
         )
 
-    if quantita_residua > prelievo.quantita_prelevata:
+    quantita_scarto = Decimal(
+        str(quantita_scarto)
+    )
+
+    if quantita_scarto < 0:
         raise ValueError(
-            "La quantità residua non può essere maggiore "
+            "La quantità di scarto non può essere negativa."
+        )
+
+    if quantita_scarto > prelievo.quantita_prelevata:
+        raise ValueError(
+            "La quantità di scarto non può essere maggiore "
             "della quantità prelevata."
         )
 
-    if prelievo.quantita_residua is not None:
+    if prelievo.quantita_scarto is not None:
         raise ValueError(
-            "Il residuo di questo prelievo è già stato registrato."
+            "Lo scarto di questo prelievo è già stato registrato."
         )
 
-    ubicazione_produzione = (
-        Ubicazione.objects
-        .filter(
-            tipo_magazzino=Ubicazione.TipoMagazzino.PRODUZIONE,
-            attiva=True,
-        )
-        .order_by("id")
-        .first()
-    )
+    prelievo.quantita_scarto = quantita_scarto
 
-    if ubicazione_produzione is None:
-        raise ValueError(
-            "Non esiste un'ubicazione attiva "
-            "per il Magazzino Produzione."
-        )
+    if note:
+        prelievo.note = note
 
-    prelievo.quantita_residua = quantita_residua
     prelievo.save(
-        update_fields=["quantita_residua"]
+        update_fields=[
+            "quantita_scarto",
+            "note",
+        ]
     )
-
-    if quantita_residua > 0:
-        giacenza, _ = Giacenza.objects.get_or_create(
-            lotto=prelievo.lotto,
-            ubicazione=ubicazione_produzione,
-            defaults={
-                "quantita": Decimal("0"),
-            },
-        )
-
-        giacenza.quantita += quantita_residua
-        giacenza.save(
-            update_fields=["quantita"]
-        )
-
-        Movimento.objects.create(
-            tipo=Movimento.Tipo.TRASFERIMENTO,
-            lotto=prelievo.lotto,
-            quantita=quantita_residua,
-            ubicazione_origine=None,
-            ubicazione_destinazione=ubicazione_produzione,
-            causale="Residuo produzione semilavorato",
-            note=note,
-        )
 
     return prelievo
+
 
 @transaction.atomic
 def conferma_produzione_semilavorato(
@@ -1329,6 +1287,27 @@ def conferma_produzione_semilavorato(
     if produzione.stato != ProduzioneSemilavorato.Stato.BOZZA:
         raise ValueError(
             "La produzione semilavorato non è in bozza."
+        )
+
+    if produzione.lotto is not None:
+        raise ValueError(
+            "La produzione ha già un lotto associato."
+        )
+
+    if not produzione.prelievi.exists():
+        raise ValueError(
+            "Non sono stati registrati prelievi "
+            "per questa produzione."
+        )
+
+    scarti_mancanti = produzione.prelievi.filter(
+        quantita_scarto__isnull=True,
+    ).exists()
+
+    if scarti_mancanti:
+        raise ValueError(
+            "Prima di confermare la produzione devi registrare "
+            "lo scarto di tutti i prelievi."
         )
 
     quantita_prodotta = Decimal(
@@ -1352,11 +1331,6 @@ def conferma_produzione_semilavorato(
         raise ValueError(
             "La destinazione deve essere "
             "un'ubicazione semilavorati."
-        )
-
-    if produzione.lotto is not None:
-        raise ValueError(
-            "La produzione ha già un lotto associato."
         )
 
     codice_lotto = genera_codice_lotto_produzione(

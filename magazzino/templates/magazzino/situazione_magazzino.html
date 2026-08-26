@@ -10,10 +10,80 @@ Situazione magazzino - Gestionale Marmellate
     <div>
         <h2>Situazione magazzino</h2>
         <p>
-            Giacenze attualmente presenti nelle diverse ubicazioni.
+            Giacenze complessive per articolo e dettaglio per lotto e ubicazione.
         </p>
     </div>
 </div>
+
+
+<h3>Giacenza complessiva per articolo</h3>
+
+<div class="table-container">
+
+    {% if articoli %}
+
+        <table>
+
+            <thead>
+                <tr>
+                    <th>Codice</th>
+                    <th>Articolo</th>
+                    <th>Categoria</th>
+                    <th>Giacenza complessiva</th>
+                    <th>Unità</th>
+                </tr>
+            </thead>
+
+            <tbody>
+
+                {% for articolo in articoli %}
+
+                    <tr>
+
+                        <td>
+                            <strong>
+                                {{ articolo.codice }}
+                            </strong>
+                        </td>
+
+                        <td>
+                            {{ articolo.descrizione }}
+                        </td>
+
+                        <td>
+                            {{ articolo.get_categoria_display }}
+                        </td>
+
+                        <td>
+                            <strong>
+                                {{ articolo.giacenza_totale }}
+                            </strong>
+                        </td>
+
+                        <td>
+                            {{ articolo.unita_misura }}
+                        </td>
+
+                    </tr>
+
+                {% endfor %}
+
+            </tbody>
+
+        </table>
+
+    {% else %}
+
+        <p>
+            Non ci sono articoli presenti in anagrafica.
+        </p>
+
+    {% endif %}
+
+</div>
+
+
+<h3>Dettaglio giacenze per lotto</h3>
 
 <div class="table-container">
 
@@ -105,6 +175,7 @@ Situazione magazzino - Gestionale Marmellate
     {% endif %}
 
 </div>
+
 
 <div class="page-actions">
 

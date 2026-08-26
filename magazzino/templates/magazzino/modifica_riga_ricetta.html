@@ -56,6 +56,15 @@ Modifica ingrediente - {{ ricetta.nome }}
         </p>
 
         <p>
+            {{ form.ingrediente_prodotto }}
+            {{ form.ingrediente_prodotto.label_tag }}
+
+            {% if form.ingrediente_prodotto.errors %}
+                {{ form.ingrediente_prodotto.errors }}
+            {% endif %}
+        </p>
+
+        <p>
             {{ form.note.label_tag }}
             {{ form.note }}
 

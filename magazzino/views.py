@@ -11,7 +11,7 @@ from .forms import (
     RigaRicettaForm,
     ProduzioneForm,
     IngredienteProduzioneForm,
-    ResiduoProduzioneForm,
+    ScartoProduzioneForm,
     ConfermaProduzioneForm,
     ConfezionamentoForm,
     InscatolamentoForm,
@@ -27,12 +27,12 @@ from .services import (
     registra_consumo,
     avvia_produzione,
     registra_prelievi_produzione,
-    registra_residuo_prelievo_produzione,
+    registra_scarto_prelievo_produzione,
     conferma_produzione,
     registra_confezionamento,
     registra_inscatolamento,
     registra_prelievi_semilavorato,
-    registra_residuo_prelievo_semilavorato,
+    registra_scarto_prelievo_semilavorato,
     conferma_produzione_semilavorato,
 )
 
@@ -130,6 +130,23 @@ def trasferimento(request):
 
 
 def situazione_magazzino(request):
+    articoli = list(
+        Articolo.objects.all().order_by(
+            "descrizione",
+        )
+    )
+
+    for articolo in articoli:
+        articolo.giacenza_totale = sum(
+            (
+                g.quantita
+                for g in Giacenza.objects.filter(
+                    lotto__articolo=articolo,
+                )
+            ),
+            Decimal("0"),
+        )
+
     giacenze = list(
         Giacenza.objects.select_related(
             "lotto__articolo",
@@ -194,10 +211,10 @@ def situazione_magazzino(request):
         request,
         "magazzino/situazione_magazzino.html",
         {
+            "articoli": articoli,
             "giacenze": giacenze,
         },
     )
-
 
 def consumo(request):
     if request.method == "POST":
@@ -1048,30 +1065,31 @@ def gestione_produzione(request, pk):
     ingrediente_form = IngredienteProduzioneForm(
         produzione=produzione,
     )
+
     conferma_form = ConfermaProduzioneForm()
 
     if (
         request.method == "POST"
-        and request.POST.get("azione") == "registra_residuo"
+        and request.POST.get("azione") == "registra_scarto"
     ):
         prelievo = get_object_or_404(
             produzione.prelievi,
             pk=request.POST.get("prelievo_id"),
         )
 
-        residuo_form = ResiduoProduzioneForm(
+        scarto_form = ScartoProduzioneForm(
             request.POST,
             prelievo=prelievo,
         )
 
-        if residuo_form.is_valid():
+        if scarto_form.is_valid():
             try:
-                registra_residuo_prelievo_produzione(
+                registra_scarto_prelievo_produzione(
                     prelievo=prelievo,
-                    quantita_residua=residuo_form.cleaned_data[
-                        "quantita_residua"
+                    quantita_scarto=scarto_form.cleaned_data[
+                        "quantita_scarto"
                     ],
-                    note=residuo_form.cleaned_data[
+                    note=scarto_form.cleaned_data[
                         "note"
                     ],
                 )
@@ -1085,20 +1103,20 @@ def gestione_produzione(request, pk):
             else:
                 messages.success(
                     request,
-                    "Residuo registrato correttamente.",
+                    "Scarto registrato correttamente.",
                 )
 
         else:
             messaggi = []
 
-            for errori_campo in residuo_form.errors.values():
+            for errori_campo in scarto_form.errors.values():
                 for errore in errori_campo:
                     messaggi.append(str(errore))
 
             messages.error(
                 request,
                 " ".join(messaggi)
-                or "Residuo non valido.",
+                or "Scarto non valido.",
             )
 
         return redirect(
@@ -1170,15 +1188,15 @@ def gestione_produzione(request, pk):
             )
 
         elif conferma_form.is_valid():
-            residui_mancanti = produzione.prelievi.filter(
-                quantita_residua__isnull=True,
+            scarti_mancanti = produzione.prelievi.filter(
+                quantita_scarto__isnull=True,
             ).exists()
 
-            if residui_mancanti:
+            if scarti_mancanti:
                 conferma_form.add_error(
                     None,
                     "Prima di confermare la produzione devi registrare "
-                    "il residuo di tutti i prelievi.",
+                    "lo scarto di tutti i prelievi.",
                 )
 
             elif not produzione.prelievi.exists():
@@ -1461,7 +1479,7 @@ def gestione_produzione_semilavorato(request, pk):
 
     if (
         request.method == "POST"
-        and request.POST.get("azione") == "registra_residuo"
+        and request.POST.get("azione") == "registra_scarto"
     ):
         prelievo = get_object_or_404(
             produzione.prelievi,
@@ -1469,18 +1487,18 @@ def gestione_produzione_semilavorato(request, pk):
         )
 
         try:
-            quantita_residua = Decimal(
+            quantita_scarto = Decimal(
                 request.POST.get(
-                    "quantita_residua",
+                    "quantita_scarto",
                     "0",
                 )
             )
 
-            registra_residuo_prelievo_semilavorato(
+            registra_scarto_prelievo_semilavorato(
                 prelievo=prelievo,
-                quantita_residua=quantita_residua,
+                quantita_scarto=quantita_scarto,
                 note=(
-                    f"Residuo produzione semilavorato "
+                    f"Scarto produzione semilavorato "
                     f"{produzione.pk}"
                 ),
             )
@@ -1494,7 +1512,7 @@ def gestione_produzione_semilavorato(request, pk):
         else:
             messages.success(
                 request,
-                "Residuo registrato correttamente.",
+                "Scarto registrato correttamente.",
             )
 
         return redirect(
@@ -1517,15 +1535,15 @@ def gestione_produzione_semilavorato(request, pk):
             )
 
         elif conferma_form.is_valid():
-            residui_mancanti = produzione.prelievi.filter(
-                quantita_residua__isnull=True,
+            scarti_mancanti = produzione.prelievi.filter(
+                quantita_scarto__isnull=True,
             ).exists()
 
-            if residui_mancanti:
+            if scarti_mancanti:
                 messages.error(
                     request,
                     "Prima di confermare la produzione devi registrare "
-                    "il residuo di tutti i prelievi.",
+                    "lo scarto di tutti i prelievi.",
                 )
 
                 return redirect(

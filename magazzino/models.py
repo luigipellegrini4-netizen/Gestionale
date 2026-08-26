@@ -392,6 +392,10 @@ class RigaRicetta(models.Model):
         blank=True,
     )
 
+    ingrediente_prodotto = models.BooleanField(
+        default=True,
+    )
+
     class Meta:
         constraints = [
             models.UniqueConstraint(
@@ -495,7 +499,7 @@ class PrelievoProduzione(models.Model):
         decimal_places=6,
     )
 
-    quantita_residua = models.DecimalField(
+    quantita_scarto = models.DecimalField(
         max_digits=12,
         decimal_places=6,
         null=True,
@@ -611,7 +615,7 @@ class PrelievoProduzioneSemilavorato(models.Model):
         decimal_places=6,
     )
 
-    quantita_residua = models.DecimalField(
+    quantita_scarto = models.DecimalField(
         max_digits=12,
         decimal_places=6,
         null=True,

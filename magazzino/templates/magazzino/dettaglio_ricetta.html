@@ -81,7 +81,7 @@
 
 <div class="card">
 
-    <h3>Ingredienti</h3>
+    <h3>Ingredienti e materiali</h3>
 
     {% if ricetta.righe.all %}
 
@@ -92,9 +92,10 @@
                 <thead>
                     <tr>
                         <th>Codice</th>
-                        <th>Ingrediente</th>
+                        <th>Ingrediente / materiale</th>
                         <th>Quantità</th>
                         <th>Unità</th>
+                        <th>Entra nel prodotto</th>
                         <th>Note</th>
                         <th>Azioni</th>
                     </tr>
@@ -120,6 +121,14 @@
 
                             <td>
                                 {{ riga.articolo.unita_misura }}
+                            </td>
+
+                            <td>
+                                {% if riga.ingrediente_prodotto %}
+                                    <strong>Sì</strong>
+                                {% else %}
+                                    No
+                                {% endif %}
                             </td>
 
                             <td>

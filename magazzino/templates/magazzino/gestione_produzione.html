@@ -114,6 +114,7 @@ Produzione {{ produzione.articolo.codice }} - Gestionale Marmellate
                     <th>Articolo</th>
                     <th>Quantità teorica</th>
                     <th>Unità</th>
+                    <th>Entra nel prodotto</th>
                 </tr>
 
             </thead>
@@ -136,6 +137,14 @@ Produzione {{ produzione.articolo.codice }} - Gestionale Marmellate
 
                         <td>
                             {{ riga.articolo.unita_misura }}
+                        </td>
+
+                        <td>
+                            {% if riga.ingrediente_prodotto %}
+                                Sì
+                            {% else %}
+                                No
+                            {% endif %}
                         </td>
 
                     </tr>
@@ -168,11 +177,11 @@ Produzione {{ produzione.articolo.codice }} - Gestionale Marmellate
                     <th>Lotto</th>
                     <th>Ubicazione origine</th>
                     <th>Prelevato</th>
-                    <th>Residuo</th>
+                    <th>Scarto</th>
                     <th>Unità</th>
 
                     {% if produzione.stato == "BOZZA" %}
-                        <th>Registra residuo</th>
+                        <th>Registra scarto</th>
                     {% endif %}
                 </tr>
 
@@ -204,8 +213,8 @@ Produzione {{ produzione.articolo.codice }} - Gestionale Marmellate
 
                         <td>
 
-                            {% if prelievo.quantita_residua != None %}
-                                {{ prelievo.quantita_residua }}
+                            {% if prelievo.quantita_scarto != None %}
+                                {{ prelievo.quantita_scarto }}
                             {% else %}
                                 Da registrare
                             {% endif %}
@@ -221,7 +230,7 @@ Produzione {{ produzione.articolo.codice }} - Gestionale Marmellate
 
                             <td>
 
-                                {% if prelievo.quantita_residua == None %}
+                                {% if prelievo.quantita_scarto == None %}
 
                                     <form method="post">
 
@@ -230,7 +239,7 @@ Produzione {{ produzione.articolo.codice }} - Gestionale Marmellate
                                         <input
                                             type="hidden"
                                             name="azione"
-                                            value="registra_residuo"
+                                            value="registra_scarto"
                                         >
 
                                         <input
@@ -241,10 +250,11 @@ Produzione {{ produzione.articolo.codice }} - Gestionale Marmellate
 
                                         <input
                                             type="number"
-                                            name="quantita_residua"
+                                            name="quantita_scarto"
                                             min="0"
                                             max="{{ prelievo.quantita_prelevata }}"
                                             step="0.001"
+                                            value="0"
                                             required
                                         >
 
@@ -293,8 +303,7 @@ Produzione {{ produzione.articolo.codice }} - Gestionale Marmellate
     <h3>Aggiungi prelievo</h3>
 
     <p>
-        Seleziona un ingrediente previsto dalla ricetta
-        oppure un materiale MOCA utilizzato nella produzione.
+        Seleziona un ingrediente o materiale previsto dalla ricetta.
         Il gestionale selezionerà automaticamente i lotti
         secondo il criterio FEFO/FIFO dell'articolo.
     </p>
@@ -371,7 +380,7 @@ Produzione {{ produzione.articolo.codice }} - Gestionale Marmellate
     <p>
         Inserisci il numero effettivo di vasetti ottenuti.
         Prima della conferma deve essere stato registrato
-        il residuo di ogni prelievo.
+        lo scarto di ogni prelievo, anche quando è pari a zero.
     </p>
 
 

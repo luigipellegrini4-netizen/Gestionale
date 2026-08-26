@@ -5,6 +5,12 @@ from . import views
 
 urlpatterns = [
     path(
+        "", 
+        views.home,
+        name="home",
+    ),
+
+    path(
         "carichi/nuovo/",
         views.nuovo_carico,
         name="nuovo_carico",
