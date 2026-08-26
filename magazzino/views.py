@@ -1,6 +1,9 @@
 from decimal import Decimal
 
 from django.contrib import messages
+from django.contrib.auth.decorators import permission_required
+from django.db.models import Sum
+from django.core.paginator import Paginator
 from django.shortcuts import get_object_or_404, redirect, render
 
 from .forms import (
@@ -49,6 +52,7 @@ from .models import (
 )
 
 
+@permission_required("magazzino.operare_magazzino", raise_exception=True)
 def nuovo_carico(request):
     if request.method == "POST":
         form = CaricoLottoForm(request.POST)
@@ -65,6 +69,7 @@ def nuovo_carico(request):
                     data_scadenza=form.cleaned_data["data_scadenza"],
                     causale=form.cleaned_data["causale"],
                     note=form.cleaned_data["note"],
+                    operatore=request.user,
                 )
 
             except ValueError as e:
@@ -88,6 +93,7 @@ def nuovo_carico(request):
     )
 
 
+@permission_required("magazzino.operare_magazzino", raise_exception=True)
 def trasferimento(request):
     if request.method == "POST":
         form = TrasferimentoForm(request.POST)
@@ -104,6 +110,7 @@ def trasferimento(request):
                         "ubicazione_destinazione"
                     ],
                     note=form.cleaned_data["note"],
+                    operatore=request.user,
                 )
 
             except ValueError as e:
@@ -136,14 +143,18 @@ def situazione_magazzino(request):
         )
     )
 
+    totali_articolo = {
+        riga["lotto__articolo_id"]: riga["totale"]
+        for riga in (
+            Giacenza.objects
+            .values("lotto__articolo_id")
+            .annotate(totale=Sum("quantita"))
+        )
+    }
+
     for articolo in articoli:
-        articolo.giacenza_totale = sum(
-            (
-                g.quantita
-                for g in Giacenza.objects.filter(
-                    lotto__articolo=articolo,
-                )
-            ),
+        articolo.giacenza_totale = totali_articolo.get(
+            articolo.pk,
             Decimal("0"),
         )
 
@@ -160,52 +171,42 @@ def situazione_magazzino(request):
         )
     )
 
-    lotti = {}
+    lotto_ids = {giacenza.lotto_id for giacenza in giacenze}
+
+    totali_lotto = {
+        riga["lotto_id"]: riga["totale"]
+        for riga in (
+            Giacenza.objects
+            .filter(lotto_id__in=lotto_ids)
+            .values("lotto_id")
+            .annotate(totale=Sum("quantita"))
+        )
+    }
+
+    totali_inscatolati = {
+        riga["lotto_prodotto_id"]: riga["totale"]
+        for riga in (
+            Inscatolamento.objects
+            .filter(lotto_prodotto_id__in=lotto_ids)
+            .values("lotto_prodotto_id")
+            .annotate(totale=Sum("quantita_prodotti"))
+        )
+    }
 
     for giacenza in giacenze:
         lotto = giacenza.lotto
-
-        if lotto.pk not in lotti:
-            quantita_totale = sum(
-                (
-                    g.quantita
-                    for g in Giacenza.objects.filter(
-                        lotto=lotto,
-                    )
-                ),
-                Decimal("0"),
-            )
-
-            quantita_inscatolata = Decimal("0")
-
-            if (
-                lotto.articolo.categoria
-                == Articolo.Categoria.PRODOTTO_FINITO
-            ):
-                quantita_inscatolata = sum(
-                    (
-                        i.quantita_prodotti
-                        for i in Inscatolamento.objects.filter(
-                            lotto_prodotto=lotto,
-                        )
-                    ),
-                    Decimal("0"),
-                )
-
-            lotti[lotto.pk] = {
-                "totale": quantita_totale,
-                "inscatolata": quantita_inscatolata,
-                "sfusa": (
-                    quantita_totale
-                    - quantita_inscatolata
-                ),
-            }
-
-        dati = lotti[lotto.pk]
-
-        giacenza.quantita_totale = dati["totale"]
-        giacenza.quantita_inscatolata = dati["inscatolata"]
-        giacenza.quantita_sfusa = dati["sfusa"]
+        giacenza.quantita_totale = totali_lotto.get(
+            lotto.pk,
+            Decimal("0"),
+        )
+        giacenza.quantita_inscatolata = totali_inscatolati.get(
+            lotto.pk,
+            Decimal("0"),
+        )
+        giacenza.quantita_sfusa = (
+            giacenza.quantita_totale
+            - giacenza.quantita_inscatolata
+        )
 
     return render(
         request,
@@ -216,6 +217,7 @@ def situazione_magazzino(request):
         },
     )
 
+@permission_required("magazzino.operare_magazzino", raise_exception=True)
 def consumo(request):
     if request.method == "POST":
         form = ConsumoForm(request.POST)
@@ -230,6 +232,7 @@ def consumo(request):
                     ],
                     causale=form.cleaned_data["causale"],
                     note=form.cleaned_data["note"],
+                    operatore=request.user,
                 )
 
             except ValueError as e:
@@ -256,19 +259,26 @@ def consumo(request):
 
 
 def elenco_movimenti(request):
-    movimenti = Movimento.objects.select_related(
+    movimenti_queryset = Movimento.objects.select_related(
         "lotto__articolo",
         "ubicazione_origine",
         "ubicazione_destinazione",
+        "eseguito_da",
     ).order_by(
         "-data_ora",
         "-id",
+    )
+    movimenti = Paginator(movimenti_queryset, 50).get_page(
+        request.GET.get("page")
     )
 
     return render(
         request,
         "magazzino/elenco_movimenti.html",
-        {"movimenti": movimenti},
+        {
+            "movimenti": movimenti,
+            "page_obj": movimenti,
+        },
     )
 
 
@@ -380,22 +390,22 @@ def dettaglio_lotto(request, pk):
         )
 
         for prelievo in prelievi:
-            quantita_residua = (
-                prelievo.quantita_residua
-                if prelievo.quantita_residua is not None
+            quantita_scarto = (
+                prelievo.quantita_scarto
+                if prelievo.quantita_scarto is not None
                 else Decimal("0")
             )
 
             quantita_utilizzata = (
                 prelievo.quantita_prelevata
-                - quantita_residua
+                - quantita_scarto
             )
 
             tracciabilita_monte.append(
                 {
                     "lotto": prelievo.lotto,
                     "quantita_prelevata": prelievo.quantita_prelevata,
-                    "quantita_residua": quantita_residua,
+                    "quantita_scarto": quantita_scarto,
                     "quantita_utilizzata": quantita_utilizzata,
                     "ubicazione": prelievo.ubicazione_origine,
                     "tipo_produzione": "Prodotto nudo",
@@ -416,22 +426,22 @@ def dettaglio_lotto(request, pk):
 
     for produzione_semilavorato in produzioni_semilavorato:
         for prelievo in produzione_semilavorato.prelievi.all():
-            quantita_residua = (
-                prelievo.quantita_residua
-                if prelievo.quantita_residua is not None
+            quantita_scarto = (
+                prelievo.quantita_scarto
+                if prelievo.quantita_scarto is not None
                 else Decimal("0")
             )
 
             quantita_utilizzata = (
                 prelievo.quantita_prelevata
-                - quantita_residua
+                - quantita_scarto
             )
 
             tracciabilita_monte.append(
                 {
                     "lotto": prelievo.lotto,
                     "quantita_prelevata": prelievo.quantita_prelevata,
-                    "quantita_residua": quantita_residua,
+                    "quantita_scarto": quantita_scarto,
                     "quantita_utilizzata": quantita_utilizzata,
                     "ubicazione": prelievo.ubicazione_origine,
                     "tipo_produzione": "Semilavorato",
@@ -463,15 +473,15 @@ def dettaglio_lotto(request, pk):
     )
 
     for prelievo in prelievi_produzione:
-        quantita_residua = (
-            prelievo.quantita_residua
-            if prelievo.quantita_residua is not None
+        quantita_scarto = (
+            prelievo.quantita_scarto
+            if prelievo.quantita_scarto is not None
             else Decimal("0")
         )
 
         quantita_utilizzata = (
             prelievo.quantita_prelevata
-            - quantita_residua
+            - quantita_scarto
         )
 
         tracciabilita_valle.append(
@@ -501,15 +511,15 @@ def dettaglio_lotto(request, pk):
     )
 
     for prelievo in prelievi_semilavorato:
-        quantita_residua = (
-            prelievo.quantita_residua
-            if prelievo.quantita_residua is not None
+        quantita_scarto = (
+            prelievo.quantita_scarto
+            if prelievo.quantita_scarto is not None
             else Decimal("0")
         )
 
         quantita_utilizzata = (
             prelievo.quantita_prelevata
-            - quantita_residua
+            - quantita_scarto
         )
 
         tracciabilita_valle.append(
@@ -539,30 +549,28 @@ def dettaglio_lotto(request, pk):
 
 
 def elenco_articoli(request):
-    articoli = (
+    articoli_queryset = (
         Articolo.objects
-        .all()
+        .annotate(
+            giacenza_totale=Sum(
+                "lotti__giacenze__quantita",
+                default=Decimal("0"),
+            )
+        )
         .order_by(
             "codice",
         )
     )
-
-    for articolo in articoli:
-        articolo.giacenza_totale = sum(
-            (
-                giacenza.quantita
-                for giacenza in Giacenza.objects.filter(
-                    lotto__articolo=articolo,
-                )
-            ),
-            Decimal("0"),
-        )
+    articoli = Paginator(articoli_queryset, 50).get_page(
+        request.GET.get("page")
+    )
 
     return render(
         request,
         "magazzino/elenco_articoli.html",
         {
             "articoli": articoli,
+            "page_obj": articoli,
         },
     )
 
@@ -621,6 +629,7 @@ def dettaglio_articolo(request, pk):
     )
 
 
+@permission_required("magazzino.operare_magazzino", raise_exception=True)
 def nuovo_articolo(request):
     if request.method == "POST":
         form = ArticoloForm(request.POST)
@@ -650,6 +659,7 @@ def nuovo_articolo(request):
     )
 
 
+@permission_required("magazzino.operare_magazzino", raise_exception=True)
 def modifica_articolo(request, pk):
     articolo = get_object_or_404(
         Articolo,
@@ -691,7 +701,7 @@ def modifica_articolo(request, pk):
 
 
 def elenco_ricette(request):
-    ricette = Ricetta.objects.select_related(
+    ricette_queryset = Ricetta.objects.select_related(
         "articolo",
     ).prefetch_related(
         "righe__articolo",
@@ -699,22 +709,29 @@ def elenco_ricette(request):
         "articolo__descrizione",
         "versione",
     )
+    ricette = Paginator(ricette_queryset, 50).get_page(
+        request.GET.get("page")
+    )
 
     return render(
         request,
         "magazzino/elenco_ricette.html",
         {
             "ricette": ricette,
+            "page_obj": ricette,
         },
     )
 
 
 def dettaglio_ricetta(request, pk):
-    ricetta = Ricetta.objects.select_related(
-        "articolo",
-    ).prefetch_related(
-        "righe__articolo",
-    ).get(pk=pk)
+    ricetta = get_object_or_404(
+        Ricetta.objects.select_related(
+            "articolo",
+        ).prefetch_related(
+            "righe__articolo",
+        ),
+        pk=pk,
+    )
 
     return render(
         request,
@@ -725,6 +742,7 @@ def dettaglio_ricetta(request, pk):
     )
 
 
+@permission_required("magazzino.operare_magazzino", raise_exception=True)
 def nuova_ricetta(request):
     if request.method == "POST":
         form = RicettaForm(request.POST)
@@ -754,8 +772,9 @@ def nuova_ricetta(request):
     )
 
 
+@permission_required("magazzino.operare_magazzino", raise_exception=True)
 def modifica_ricetta(request, pk):
-    ricetta = Ricetta.objects.get(pk=pk)
+    ricetta = get_object_or_404(Ricetta, pk=pk)
 
     if request.method == "POST":
         form = RicettaForm(
@@ -791,8 +810,9 @@ def modifica_ricetta(request, pk):
     )
 
 
+@permission_required("magazzino.operare_magazzino", raise_exception=True)
 def aggiungi_riga_ricetta(request, pk):
-    ricetta = Ricetta.objects.get(pk=pk)
+    ricetta = get_object_or_404(Ricetta, pk=pk)
 
     if request.method == "POST":
         form = RigaRicettaForm(request.POST)
@@ -837,12 +857,16 @@ def aggiungi_riga_ricetta(request, pk):
     )
 
 
+@permission_required("magazzino.operare_magazzino", raise_exception=True)
 def modifica_riga_ricetta(request, pk):
-    riga = RigaRicetta.objects.select_related(
-        "ricetta",
-        "ricetta__articolo",
-        "articolo",
-    ).get(pk=pk)
+    riga = get_object_or_404(
+        RigaRicetta.objects.select_related(
+            "ricetta",
+            "ricetta__articolo",
+            "articolo",
+        ),
+        pk=pk,
+    )
 
     ricetta = riga.ricetta
 
@@ -881,10 +905,12 @@ def modifica_riga_ricetta(request, pk):
     )
 
 
+@permission_required("magazzino.operare_magazzino", raise_exception=True)
 def elimina_riga_ricetta(request, pk):
-    riga = RigaRicetta.objects.select_related(
-        "ricetta",
-    ).get(pk=pk)
+    riga = get_object_or_404(
+        RigaRicetta.objects.select_related("ricetta"),
+        pk=pk,
+    )
 
     ricetta = riga.ricetta
 
@@ -918,7 +944,7 @@ def elimina_riga_ricetta(request, pk):
 def elenco_produzioni(request, tipo="produzione"):
 
     if tipo == "semilavorato":
-        produzioni = (
+        produzioni_queryset = (
             ProduzioneSemilavorato.objects
             .select_related(
                 "articolo",
@@ -939,7 +965,7 @@ def elenco_produzioni(request, tipo="produzione"):
         gestione_url = "gestione_produzione_semilavorato"
 
     else:
-        produzioni = (
+        produzioni_queryset = (
             Produzione.objects
             .select_related(
                 "articolo",
@@ -959,6 +985,10 @@ def elenco_produzioni(request, tipo="produzione"):
         nuova_produzione_url = "nuova_produzione"
         gestione_url = "gestione_produzione"
 
+    produzioni = Paginator(produzioni_queryset, 50).get_page(
+        request.GET.get("page")
+    )
+
     return render(
         request,
         "magazzino/elenco_produzioni.html",
@@ -968,10 +998,12 @@ def elenco_produzioni(request, tipo="produzione"):
             "titolo": titolo,
             "nuova_produzione_url": nuova_produzione_url,
             "gestione_url": gestione_url,
+            "page_obj": produzioni,
         },
     )
 
 
+@permission_required("magazzino.operare_magazzino", raise_exception=True)
 def nuova_produzione(request):
     if request.method == "POST":
         form = ProduzioneForm(request.POST)
@@ -1037,6 +1069,7 @@ def nuova_produzione(request):
     )
 
 
+@permission_required("magazzino.operare_magazzino", raise_exception=True)
 def gestione_produzione(request, pk):
     produzione = get_object_or_404(
         Produzione.objects
@@ -1153,6 +1186,7 @@ def gestione_produzione(request, pk):
                         f"Prelievo per produzione "
                         f"{produzione.pk}"
                     ),
+                    operatore=request.user,
                 )
 
             except ValueError as errore:
@@ -1216,6 +1250,7 @@ def gestione_produzione(request, pk):
                         note=conferma_form.cleaned_data[
                             "note"
                         ],
+                        operatore=request.user,
                     )
 
                 except ValueError as errore:
@@ -1262,6 +1297,7 @@ def gestione_produzione(request, pk):
     )
 
 
+@permission_required("magazzino.operare_magazzino", raise_exception=True)
 def nuovo_confezionamento(request):
     confezionamento = None
 
@@ -1311,6 +1347,7 @@ def nuovo_confezionamento(request):
                             "data_confezionamento"
                         ],
                         note=form.cleaned_data["note"],
+                        operatore=request.user,
                     )
 
                 except ValueError as errore:
@@ -1350,6 +1387,7 @@ def nuovo_confezionamento(request):
     )
 
 
+@permission_required("magazzino.operare_magazzino", raise_exception=True)
 def nuovo_inscatolamento(request):
     inscatolamento = None
 
@@ -1380,6 +1418,7 @@ def nuovo_inscatolamento(request):
                     note=form.cleaned_data[
                         "note"
                     ],
+                    operatore=request.user,
                 )
 
             except ValueError as errore:
@@ -1422,6 +1461,7 @@ def nuovo_inscatolamento(request):
 # ============================================================
 
 
+@permission_required("magazzino.operare_magazzino", raise_exception=True)
 def nuova_produzione_semilavorato(request):
     if request.method == "POST":
         form = ProduzioneSemilavoratoForm(request.POST)
@@ -1456,6 +1496,7 @@ def nuova_produzione_semilavorato(request):
     )
 
 
+@permission_required("magazzino.operare_magazzino", raise_exception=True)
 def gestione_produzione_semilavorato(request, pk):
     produzione = get_object_or_404(
         ProduzioneSemilavorato.objects
@@ -1563,6 +1604,7 @@ def gestione_produzione_semilavorato(request, pk):
                     note=conferma_form.cleaned_data[
                         "note"
                     ],
+                    operatore=request.user,
                 )
 
             except ValueError as errore:
@@ -1613,6 +1655,7 @@ def gestione_produzione_semilavorato(request, pk):
                         f"Prelievo per produzione semilavorato "
                         f"{produzione.pk}"
                     ),
+                    operatore=request.user,
                 )
 
             except ValueError as errore:

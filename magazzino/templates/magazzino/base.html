@@ -73,37 +73,45 @@
                     PRODUZIONE
                 </div>
 
-                <a href="{% url 'nuova_produzione_semilavorato' %}">
-                    Nuova produzione semilavorato
-                </a>
+                {% if perms.magazzino.operare_magazzino %}
+                    <a href="{% url 'nuova_produzione_semilavorato' %}">
+                        Nuova produzione semilavorato
+                    </a>
+                {% endif %}
 
                 <a href="{% url 'elenco_produzioni_semilavorato' %}">
                     Produzioni semilavorati
                 </a>
 
-                <a href="{% url 'nuova_produzione' %}">
-                    Nuova produzione
-                </a>
+                {% if perms.magazzino.operare_magazzino %}
+                    <a href="{% url 'nuova_produzione' %}">
+                        Nuova produzione
+                    </a>
+                {% endif %}
 
                 <a href="{% url 'elenco_produzioni' %}">
                     Produzioni
                 </a>
 
-                <a href="{% url 'nuovo_confezionamento' %}">
-                    Nuovo confezionamento
-                </a>
+                {% if perms.magazzino.operare_magazzino %}
+                    <a href="{% url 'nuovo_confezionamento' %}">
+                        Nuovo confezionamento
+                    </a>
 
-                <a href="{% url 'nuovo_inscatolamento' %}">
-                    Nuovo inscatolamento
-                </a>
+                    <a href="{% url 'nuovo_inscatolamento' %}">
+                        Nuovo inscatolamento
+                    </a>
+                {% endif %}
 
                 <a href="{% url 'elenco_ricette' %}">
                     Ricette
                 </a>
 
-                <a href="{% url 'nuova_ricetta' %}">
-                    Nuova ricetta
-                </a>
+                {% if perms.magazzino.operare_magazzino %}
+                    <a href="{% url 'nuova_ricetta' %}">
+                        Nuova ricetta
+                    </a>
+                {% endif %}
             </div>
 
 
@@ -112,9 +120,11 @@
                     AMMINISTRAZIONE
                 </div>
 
-                <a href="/admin/">
-                    Amministrazione
-                </a>
+                {% if user.is_staff %}
+                    <a href="/admin/">
+                        Amministrazione
+                    </a>
+                {% endif %}
             </div>
 
 

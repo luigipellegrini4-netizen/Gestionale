@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.db import models
 
 
@@ -88,6 +89,14 @@ class Articolo(models.Model):
     note = models.TextField(
         blank=True,
     )
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(scorta_minima__gte=0),
+                name="articolo_scorta_minima_non_negativa",
+            ),
+        ]
 
     def __str__(self):
         return f"{self.codice} - {self.descrizione}"
@@ -244,6 +253,10 @@ class Lotto(models.Model):
                 fields=["articolo", "codice_lotto"],
                 name="unico_lotto_per_articolo",
             ),
+            models.CheckConstraint(
+                condition=models.Q(quantita_iniziale__gt=0),
+                name="lotto_quantita_iniziale_positiva",
+            ),
         ]
 
 
@@ -272,6 +285,10 @@ class Giacenza(models.Model):
             models.UniqueConstraint(
                 fields=["lotto", "ubicazione"],
                 name="unica_giacenza_lotto_ubicazione",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(quantita__gte=0),
+                name="giacenza_quantita_non_negativa",
             ),
         ]
 
@@ -335,6 +352,28 @@ class Movimento(models.Model):
     note = models.TextField(
         blank=True,
     )
+
+    eseguito_da = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        related_name="movimenti_magazzino",
+        null=True,
+        blank=True,
+    )
+
+    class Meta:
+        permissions = [
+            (
+                "operare_magazzino",
+                "Può eseguire operazioni e modifiche di magazzino",
+            ),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(quantita__gt=0),
+                name="movimento_quantita_positiva",
+            ),
+        ]
 
     def __str__(self):
         return f"{self.data_ora:%Y-%m-%d %H:%M} - {self.tipo} - {self.lotto}"
@@ -401,6 +440,10 @@ class RigaRicetta(models.Model):
             models.UniqueConstraint(
                 fields=["ricetta", "articolo"],
                 name="unico_articolo_per_ricetta",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(quantita__gt=0),
+                name="riga_ricetta_quantita_positiva",
             ),
         ]
 

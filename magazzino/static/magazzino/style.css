@@ -609,3 +609,27 @@ button:hover {
     background: none;
     text-decoration: underline;
 }
+
+/* PAGINAZIONE */
+
+.pagination {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    justify-content: center;
+    margin: 1.5rem 0;
+}
+
+.pagination a {
+    background: #ffffff;
+    border: 1px solid #d7dce2;
+    border-radius: 6px;
+    color: #243447;
+    padding: 0.5rem 0.75rem;
+    text-decoration: none;
+}
+
+.pagination a:hover {
+    background: #f1f4f7;
+}

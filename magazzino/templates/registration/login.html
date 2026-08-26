@@ -1,0 +1,37 @@
+{% extends "magazzino/base.html" %}
+
+{% block title %}
+Accesso - Gestionale
+{% endblock %}
+
+{% block content %}
+<section class="form-card">
+    <h2>Accedi al gestionale</h2>
+
+    {% if form.errors %}
+        <div class="message error">
+            Nome utente o password non corretti.
+        </div>
+    {% endif %}
+
+    {% if next and user.is_authenticated %}
+        <div class="message error">
+            Il tuo account non è autorizzato ad accedere a questa pagina.
+        </div>
+    {% endif %}
+
+    <form method="post" action="{% url 'login' %}">
+        {% csrf_token %}
+
+        {{ form.as_p }}
+
+        {% if next %}
+            <input type="hidden" name="next" value="{{ next }}">
+        {% endif %}
+
+        <div class="form-actions">
+            <button type="submit">Accedi</button>
+        </div>
+    </form>
+</section>
+{% endblock %}

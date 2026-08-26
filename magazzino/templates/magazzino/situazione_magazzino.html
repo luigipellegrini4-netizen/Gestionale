@@ -177,6 +177,7 @@ Situazione magazzino - Gestionale Marmellate
 </div>
 
 
+{% if perms.magazzino.operare_magazzino %}
 <div class="page-actions">
 
     <a href="{% url 'nuovo_carico' %}" class="btn">
@@ -192,5 +193,6 @@ Situazione magazzino - Gestionale Marmellate
     </a>
 
 </div>
+{% endif %}
 
 {% endblock %}

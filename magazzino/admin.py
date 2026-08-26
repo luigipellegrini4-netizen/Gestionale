@@ -133,6 +133,7 @@ class MovimentoAdmin(admin.ModelAdmin):
         "quantita",
         "ubicazione_origine",
         "ubicazione_destinazione",
+        "eseguito_da",
         "causale",
     )
     list_filter = (
@@ -140,11 +141,15 @@ class MovimentoAdmin(admin.ModelAdmin):
         "data_ora",
         "ubicazione_origine",
         "ubicazione_destinazione",
+        "eseguito_da",
     )
     search_fields = (
         "lotto__codice_lotto",
         "lotto__articolo__codice",
         "lotto__articolo__descrizione",
+        "eseguito_da__username",
+        "eseguito_da__first_name",
+        "eseguito_da__last_name",
         "causale",
         "note",
     )

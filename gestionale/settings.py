@@ -13,12 +13,35 @@ https://docs.djangoproject.com/en/6.1/ref/settings/
 import os
 from pathlib import Path
 
+from django.core.exceptions import ImproperlyConfigured
+from django.core.management.utils import get_random_secret_key
+
 
 # ============================================================
 # PERCORSI
 # ============================================================
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+
+def load_local_env(path):
+    """Carica un semplice file .env locale senza sovrascrivere l'ambiente."""
+    if not path.exists():
+        return
+
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+
+        name, value = line.split("=", 1)
+        name = name.strip()
+        value = value.strip().strip('"').strip("'")
+        if name:
+            os.environ.setdefault(name, value)
+
+
+load_local_env(BASE_DIR / ".env")
 
 
 # ============================================================
@@ -28,24 +51,72 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 IS_PYTHONANYWHERE = "PYTHONANYWHERE_DOMAIN" in os.environ
 
 
+def env_bool(name, default=False):
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def env_list(name, default=""):
+    return [
+        item.strip()
+        for item in os.getenv(name, default).split(",")
+        if item.strip()
+    ]
+
+
+def env_int(name, default=0):
+    value = os.getenv(name)
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise ImproperlyConfigured(
+            f"{name} deve contenere un numero intero."
+        ) from exc
+
+
 # ============================================================
 # SICUREZZA
 # ============================================================
 
-SECRET_KEY = 'django-insecure-zy!8_lcm@$2=s3fy9)7+01s4q8vh!)azczla2qgnq&5v+e(uo%'
+DEBUG = env_bool("DJANGO_DEBUG", default=not IS_PYTHONANYWHERE)
 
-if IS_PYTHONANYWHERE:
-    DEBUG = False
-    ALLOWED_HOSTS = [
-        ".pythonanywhere.com",
-    ]
-else:
-    DEBUG = True
-    ALLOWED_HOSTS = [
-        "127.0.0.1",
-        "localhost",
-        "192.168.1.178",
-    ]
+SECRET_KEY = os.getenv("DJANGO_SECRET_KEY")
+if not SECRET_KEY:
+    if DEBUG:
+        SECRET_KEY = get_random_secret_key()
+    else:
+        raise ImproperlyConfigured(
+            "DJANGO_SECRET_KEY deve essere configurata in produzione."
+        )
+
+default_hosts = (
+    ".pythonanywhere.com"
+    if IS_PYTHONANYWHERE
+    else "127.0.0.1,localhost,192.168.1.178"
+)
+ALLOWED_HOSTS = env_list("DJANGO_ALLOWED_HOSTS", default_hosts)
+
+# PythonAnywhere gestisce il redirect HTTP -> HTTPS dal pannello Web.
+# I cookie sicuri e HSTS vengono invece emessi soltanto nell'ambiente online.
+SECURE_SSL_REDIRECT = env_bool("DJANGO_SECURE_SSL_REDIRECT", default=False)
+SESSION_COOKIE_SECURE = env_bool(
+    "DJANGO_SESSION_COOKIE_SECURE",
+    default=IS_PYTHONANYWHERE,
+)
+CSRF_COOKIE_SECURE = env_bool(
+    "DJANGO_CSRF_COOKIE_SECURE",
+    default=IS_PYTHONANYWHERE,
+)
+SECURE_HSTS_SECONDS = env_int(
+    "DJANGO_SECURE_HSTS_SECONDS",
+    default=3600 if IS_PYTHONANYWHERE else 0,
+)
+SECURE_HSTS_INCLUDE_SUBDOMAINS = False
+SECURE_HSTS_PRELOAD = False
 
 
 # ============================================================
@@ -73,6 +144,7 @@ MIDDLEWARE = [
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'django.contrib.auth.middleware.LoginRequiredMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
@@ -116,27 +188,33 @@ WSGI_APPLICATION = 'gestionale.wsgi.application'
 # DATABASE
 # ============================================================
 
-if IS_PYTHONANYWHERE:
+DATABASE_ENGINE = os.getenv(
+    "DATABASE_ENGINE",
+    "sqlite" if IS_PYTHONANYWHERE else "mysql",
+).lower()
 
+if DATABASE_ENGINE == "sqlite":
     DATABASES = {
         "default": {
             "ENGINE": "django.db.backends.sqlite3",
-            "NAME": BASE_DIR / "db.sqlite3",
+            "NAME": os.getenv("DATABASE_NAME", BASE_DIR / "db.sqlite3"),
         }
     }
-
-else:
-
+elif DATABASE_ENGINE == "mysql":
     DATABASES = {
         "default": {
             "ENGINE": "django.db.backends.mysql",
-            "NAME": "gestionale",
-            "USER": "luigi",
-            "PASSWORD": "luigi",
-            "HOST": "127.0.0.1",
-            "PORT": "3306",
+            "NAME": os.getenv("DATABASE_NAME", "gestionale"),
+            "USER": os.getenv("DATABASE_USER", "luigi"),
+            "PASSWORD": os.getenv("DATABASE_PASSWORD", ""),
+            "HOST": os.getenv("DATABASE_HOST", "127.0.0.1"),
+            "PORT": os.getenv("DATABASE_PORT", "3306"),
         }
     }
+else:
+    raise ImproperlyConfigured(
+        "DATABASE_ENGINE deve essere 'mysql' oppure 'sqlite'."
+    )
 
 
 # ============================================================
@@ -182,11 +260,16 @@ STATIC_ROOT = BASE_DIR / 'staticfiles'
 
 
 # ============================================================
+# AUTENTICAZIONE
+# ============================================================
+
+LOGIN_URL = "login"
+LOGIN_REDIRECT_URL = "home"
+LOGOUT_REDIRECT_URL = "login"
+
+
+# ============================================================
 # EMAIL
 # ============================================================
 
-MAILERS = {
-    'default': {
-        'BACKEND': 'django.core.mail.backends.console.EmailBackend',
-    },
-}
+EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"

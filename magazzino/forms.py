@@ -228,6 +228,25 @@ class RicettaForm(forms.ModelForm):
             )
         )
 
+    def clean(self):
+        cleaned_data = super().clean()
+        articolo = cleaned_data.get("articolo")
+        attiva = cleaned_data.get("attiva")
+
+        if articolo is not None and attiva:
+            altre_attive = Ricetta.objects.filter(
+                articolo=articolo,
+                attiva=True,
+            ).exclude(pk=self.instance.pk)
+
+            if altre_attive.exists():
+                self.add_error(
+                    "attiva",
+                    "Esiste già una ricetta attiva per questo articolo.",
+                )
+
+        return cleaned_data
+
 
 class RigaRicettaForm(forms.ModelForm):
 
@@ -273,6 +292,14 @@ class RigaRicettaForm(forms.ModelForm):
                 "codice",
             )
         )
+
+    def clean_quantita(self):
+        quantita = self.cleaned_data["quantita"]
+        if quantita <= 0:
+            raise forms.ValidationError(
+                "La quantità deve essere maggiore di zero."
+            )
+        return quantita
 
 
 # ============================================================

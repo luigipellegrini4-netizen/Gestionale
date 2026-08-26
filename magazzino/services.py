@@ -23,6 +23,7 @@ def registra_carico(
     ubicazione,
     causale="Carico",
     note="",
+    operatore=None,
 ):
     quantita = Decimal(str(quantita))
     if quantita <= 0:
@@ -33,7 +34,7 @@ def registra_carico(
         raise ValueError("L'ubicazione non è attiva.")
     if not isinstance(lotto, Lotto):
         raise ValueError("Il lotto non è valido.")
-    giacenza, _ = Giacenza.objects.get_or_create(
+    giacenza, _ = Giacenza.objects.select_for_update().get_or_create(
         lotto=lotto,
         ubicazione=ubicazione,
         defaults={"quantita": Decimal("0")},
@@ -47,6 +48,7 @@ def registra_carico(
         ubicazione_destinazione=ubicazione,
         causale=causale,
         note=note,
+        eseguito_da=operatore,
     )
     return movimento
 
@@ -62,6 +64,7 @@ def registra_carico_lotto(
     data_scadenza=None,
     causale="Carico",
     note="",
+    operatore=None,
 ):
     quantita = Decimal(str(quantita))
     if quantita <= 0:
@@ -96,6 +99,7 @@ def registra_carico_lotto(
         ubicazione=ubicazione,
         causale=causale,
         note=note,
+        operatore=operatore,
     )
     return lotto, movimento
 
@@ -107,6 +111,7 @@ def registra_trasferimento(
     ubicazione_origine,
     ubicazione_destinazione,
     note="",
+    operatore=None,
 ):
     quantita = Decimal(str(quantita))
     if quantita <= 0:
@@ -119,18 +124,27 @@ def registra_trasferimento(
         raise ValueError("L'ubicazione di origine non è attiva.")
     if not ubicazione_destinazione.attiva:
         raise ValueError("L'ubicazione di destinazione non è attiva.")
-    giacenza_origine = Giacenza.objects.filter(
-        lotto=lotto,
-        ubicazione=ubicazione_origine,
-    ).first()
+    giacenza_origine = (
+        Giacenza.objects
+        .select_for_update()
+        .filter(
+            lotto=lotto,
+            ubicazione=ubicazione_origine,
+        )
+        .first()
+    )
     if giacenza_origine is None or giacenza_origine.quantita < quantita:
         raise ValueError(
             "Quantità insufficiente nell'ubicazione di origine."
         )
-    giacenza_destinazione, _ = Giacenza.objects.get_or_create(
-        lotto=lotto,
-        ubicazione=ubicazione_destinazione,
-        defaults={"quantita": Decimal("0")},
+    giacenza_destinazione, _ = (
+        Giacenza.objects
+        .select_for_update()
+        .get_or_create(
+            lotto=lotto,
+            ubicazione=ubicazione_destinazione,
+            defaults={"quantita": Decimal("0")},
+        )
     )
     giacenza_origine.quantita -= quantita
     giacenza_origine.save(update_fields=["quantita"])
@@ -144,6 +158,7 @@ def registra_trasferimento(
         ubicazione_destinazione=ubicazione_destinazione,
         causale="Trasferimento",
         note=note,
+        eseguito_da=operatore,
     )
     return movimento
 
@@ -155,16 +170,22 @@ def registra_consumo(
     ubicazione_origine,
     causale="Consumo",
     note="",
+    operatore=None,
 ):
     quantita = Decimal(str(quantita))
     if quantita <= 0:
         raise ValueError("La quantità deve essere maggiore di zero.")
     if not ubicazione_origine.attiva:
         raise ValueError("L'ubicazione di origine non è attiva.")
-    giacenza = Giacenza.objects.filter(
-        lotto=lotto,
-        ubicazione=ubicazione_origine,
-    ).first()
+    giacenza = (
+        Giacenza.objects
+        .select_for_update()
+        .filter(
+            lotto=lotto,
+            ubicazione=ubicazione_origine,
+        )
+        .first()
+    )
     if giacenza is None or giacenza.quantita < quantita:
         raise ValueError(
             "Quantità insufficiente nell'ubicazione di origine."
@@ -179,6 +200,7 @@ def registra_consumo(
         ubicazione_destinazione=None,
         causale=causale,
         note=note,
+        eseguito_da=operatore,
     )
     return movimento
 
@@ -285,9 +307,16 @@ def registra_prelievi_produzione(
     articolo,
     quantita_richiesta,
     note="",
+    operatore=None,
 ):
     if not isinstance(produzione, Produzione):
         raise ValueError("La produzione non è valida.")
+
+    produzione = (
+        Produzione.objects
+        .select_for_update()
+        .get(pk=produzione.pk)
+    )
 
     if produzione.stato != Produzione.Stato.BOZZA:
         raise ValueError(
@@ -361,6 +390,7 @@ def registra_prelievi_produzione(
             ubicazione_destinazione=None,
             causale="Prelievo produzione marmellata",
             note=note,
+            eseguito_da=operatore,
         )
 
         prelievo = PrelievoProduzione.objects.create(
@@ -387,6 +417,13 @@ def registra_scarto_prelievo_produzione(
         raise ValueError(
             "Il prelievo non è valido."
         )
+
+    prelievo = (
+        PrelievoProduzione.objects
+        .select_related("produzione")
+        .select_for_update()
+        .get(pk=prelievo.pk)
+    )
 
     if prelievo.produzione.stato != Produzione.Stato.BOZZA:
         raise ValueError(
@@ -435,9 +472,16 @@ def conferma_produzione(
     quantita_prodotta,
     ubicazione_destinazione=None,
     note="",
+    operatore=None,
 ):
     if not isinstance(produzione, Produzione):
         raise ValueError("La produzione non è valida.")
+
+    produzione = (
+        Produzione.objects
+        .select_for_update()
+        .get(pk=produzione.pk)
+    )
 
     if produzione.stato != Produzione.Stato.BOZZA:
         raise ValueError("La produzione non è in bozza.")
@@ -570,6 +614,7 @@ def conferma_produzione(
         ubicazione_destinazione=ubicazione_destinazione,
         causale="Produzione marmellata - prodotto nudo",
         note=note,
+        eseguito_da=operatore,
     )
 
     produzione.lotto = lotto
@@ -600,6 +645,7 @@ def registra_produzione(
     consumi,
     data_produzione=None,
     note="",
+    operatore=None,
 ):
     """Compatibilità temporanea con le vecchie view.
 
@@ -619,6 +665,7 @@ def registra_produzione(
             articolo=articolo_consumato,
             quantita_richiesta=quantita,
             note=note,
+            operatore=operatore,
         )
         for prelievo in prelievi:
             registra_scarto_prelievo_produzione(
@@ -631,6 +678,7 @@ def registra_produzione(
         produzione=produzione,
         quantita_prodotta=quantita_prodotta,
         note=note,
+        operatore=operatore,
     )
 
 
@@ -644,6 +692,7 @@ def registra_confezionamento(
     ubicazione_destinazione,
     data_confezionamento=None,
     note="",
+    operatore=None,
 ):
     quantita_confezionata = Decimal(str(quantita_confezionata))
 
@@ -804,14 +853,19 @@ def registra_confezionamento(
         ubicazione_destinazione=None,
         causale="Prodotto nudo confezionato",
         note=note,
+        eseguito_da=operatore,
     )
 
-    giacenza_finito, _ = Giacenza.objects.get_or_create(
-        lotto=lotto_finito,
-        ubicazione=ubicazione_destinazione,
-        defaults={
-            "quantita": Decimal("0"),
-        },
+    giacenza_finito, _ = (
+        Giacenza.objects
+        .select_for_update()
+        .get_or_create(
+            lotto=lotto_finito,
+            ubicazione=ubicazione_destinazione,
+            defaults={
+                "quantita": Decimal("0"),
+            },
+        )
     )
 
     giacenza_finito.quantita += quantita_confezionata
@@ -827,6 +881,7 @@ def registra_confezionamento(
         ubicazione_destinazione=ubicazione_destinazione,
         causale="Prodotto finito da confezionamento",
         note=note,
+        eseguito_da=operatore,
     )
 
     for dati in consumi_preparati:
@@ -857,6 +912,7 @@ def registra_confezionamento(
                 ubicazione_destinazione=None,
                 causale="Consumo materiale packaging",
                 note=note,
+                eseguito_da=operatore,
             )
 
             ConsumoConfezionamento.objects.create(
@@ -879,6 +935,7 @@ def registra_inscatolamento(
     ubicazione_imballo,
     data_inscatolamento=None,
     note="",
+    operatore=None,
 ):
     quantita_prodotti = Decimal(str(quantita_prodotti))
 
@@ -1011,6 +1068,7 @@ def registra_inscatolamento(
         ubicazione_destinazione=None,
         causale="Consumo imballo per inscatolamento",
         note=note,
+        eseguito_da=operatore,
     )
 
     return inscatolamento
@@ -1126,6 +1184,7 @@ def registra_prelievi_semilavorato(
     articolo,
     quantita_richiesta,
     note="",
+    operatore=None,
 ):
     from .models import (
         ProduzioneSemilavorato,
@@ -1136,6 +1195,12 @@ def registra_prelievi_semilavorato(
         raise ValueError(
             "La produzione semilavorato non è valida."
         )
+
+    produzione = (
+        ProduzioneSemilavorato.objects
+        .select_for_update()
+        .get(pk=produzione.pk)
+    )
 
     if produzione.stato != ProduzioneSemilavorato.Stato.BOZZA:
         raise ValueError(
@@ -1191,6 +1256,7 @@ def registra_prelievi_semilavorato(
             ubicazione_destinazione=None,
             causale="Prelievo produzione semilavorato",
             note=note,
+            eseguito_da=operatore,
         )
 
         prelievo = PrelievoProduzioneSemilavorato.objects.create(
@@ -1225,6 +1291,13 @@ def registra_scarto_prelievo_semilavorato(
         raise ValueError(
             "Il prelievo non è valido."
         )
+
+    prelievo = (
+        PrelievoProduzioneSemilavorato.objects
+        .select_related("produzione")
+        .select_for_update()
+        .get(pk=prelievo.pk)
+    )
 
     if (
         prelievo.produzione.stato
@@ -1276,6 +1349,7 @@ def conferma_produzione_semilavorato(
     quantita_prodotta,
     ubicazione_destinazione,
     note="",
+    operatore=None,
 ):
     from .models import ProduzioneSemilavorato
 
@@ -1283,6 +1357,12 @@ def conferma_produzione_semilavorato(
         raise ValueError(
             "La produzione semilavorato non è valida."
         )
+
+    produzione = (
+        ProduzioneSemilavorato.objects
+        .select_for_update()
+        .get(pk=produzione.pk)
+    )
 
     if produzione.stato != ProduzioneSemilavorato.Stato.BOZZA:
         raise ValueError(
@@ -1361,6 +1441,7 @@ def conferma_produzione_semilavorato(
         ubicazione_destinazione=ubicazione_destinazione,
         causale="Produzione semilavorato",
         note=note,
+        eseguito_da=operatore,
     )
 
     produzione.lotto = lotto

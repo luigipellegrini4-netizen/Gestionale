@@ -28,6 +28,7 @@ Movimenti di magazzino - Gestionale Marmellate
                     <th>Quantità</th>
                     <th>Origine</th>
                     <th>Destinazione</th>
+                    <th>Operatore</th>
                     <th>Causale</th>
                     <th>Note</th>
                 </tr>
@@ -79,6 +80,14 @@ Movimenti di magazzino - Gestionale Marmellate
                         </td>
 
                         <td>
+                            {% if movimento.eseguito_da %}
+                                {{ movimento.eseguito_da.get_full_name|default:movimento.eseguito_da.username }}
+                            {% else %}
+                                Storico
+                            {% endif %}
+                        </td>
+
+                        <td>
                             {{ movimento.causale }}
                         </td>
 
@@ -101,5 +110,7 @@ Movimenti di magazzino - Gestionale Marmellate
     {% endif %}
 
 </div>
+
+{% include "magazzino/includes/pagination.html" %}
 
 {% endblock %}
