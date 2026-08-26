@@ -1,0 +1,49 @@
+{% extends "magazzino/base.html" %}
+
+{% block title %}Importazione CSV - MIRA{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h2>Importazione anagrafiche CSV</h2>
+        <p>Scarica il template, compilalo senza modificare le intestazioni e caricalo.</p>
+    </div>
+</div>
+
+<div class="card">
+    <h3>Scarica template</h3>
+    <div class="page-actions">
+        <a href="{% url 'template_csv' 'fornitori' %}" class="btn btn-secondary">Fornitori</a>
+        <a href="{% url 'template_csv' 'articoli' %}" class="btn btn-secondary">Articoli</a>
+        <a href="{% url 'template_csv' 'ubicazioni' %}" class="btn btn-secondary">Ubicazioni</a>
+    </div>
+</div>
+
+<div class="form-card">
+    <h3>Carica file</h3>
+    <form method="post" enctype="multipart/form-data">
+        {% csrf_token %}
+        {{ form.as_p }}
+        <div class="form-actions">
+            <button type="submit" class="btn">Controlla e importa</button>
+        </div>
+    </form>
+</div>
+
+{% if risultato.errori %}
+    <div class="message error">
+        <strong>Importazione annullata. Correggi questi errori:</strong>
+        <ul>
+            {% for errore in risultato.errori %}<li>{{ errore }}</li>{% endfor %}
+        </ul>
+    </div>
+{% endif %}
+
+<div class="card">
+    <h3>Valori ammessi</h3>
+    <p><strong>Booleani:</strong> vero/falso, sì/no oppure 1/0.</p>
+    <p><strong>Categorie articolo:</strong> MATERIA_PRIMA, MOCA, IGIENE, SEMILAVORATO, PACKAGING, PRODOTTO_NUDO, PRODOTTO_FINITO.</p>
+    <p><strong>Unità:</strong> KG, L, PZ. <strong>Rotazione:</strong> FIFO, FEFO, NESSUNO.</p>
+    <p><strong>Tipi magazzino:</strong> MP, IGIENE, MOCA, SEMILAVORATI, PRODUZIONE, PACKAGING, PRODOTTI_FINITI.</p>
+</div>
+{% endblock %}

@@ -1,0 +1,45 @@
+{% extends "magazzino/base.html" %}
+
+{% block title %}Fornitori - MIRA{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h2>Fornitori</h2>
+        <p>Anagrafica dei fornitori.</p>
+    </div>
+    <div class="page-actions">
+        <a href="{% url 'nuovo_fornitore' %}" class="btn">Nuovo fornitore</a>
+    </div>
+</div>
+
+<div class="table-container">
+    <table>
+        <thead>
+            <tr>
+                <th>Codice</th><th>Ragione sociale</th><th>Partita IVA</th>
+                <th>Telefono</th><th>Email</th><th>Stato</th><th>Azioni</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for fornitore in fornitori %}
+                <tr>
+                    <td><strong>{{ fornitore.codice }}</strong></td>
+                    <td>{{ fornitore.ragione_sociale }}</td>
+                    <td>{{ fornitore.partita_iva|default:"—" }}</td>
+                    <td>{{ fornitore.telefono|default:"—" }}</td>
+                    <td>{{ fornitore.email|default:"—" }}</td>
+                    <td>{% if fornitore.attivo %}Attivo{% else %}Non attivo{% endif %}</td>
+                    <td>
+                        <a href="{% url 'modifica_fornitore' fornitore.pk %}"
+                           class="btn btn-secondary">Modifica</a>
+                    </td>
+                </tr>
+            {% empty %}
+                <tr><td colspan="7">Nessun fornitore registrato.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% include "magazzino/includes/pagination.html" %}
+{% endblock %}

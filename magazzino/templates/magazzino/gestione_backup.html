@@ -1,0 +1,39 @@
+{% extends "magazzino/base.html" %}
+
+{% block title %}Backup database - MIRA{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h2>Backup e ripristino database</h2>
+        <p>Esporta o sostituisci tutti i dati gestionali di MIRA.</p>
+    </div>
+    <div class="page-actions">
+        <a href="{% url 'esporta_backup' %}" class="btn">Esporta backup JSON</a>
+    </div>
+</div>
+
+<div class="card">
+    <h3>Dati inclusi</h3>
+    <p>
+        Anagrafiche, lotti, giacenze, movimenti, ricette, produzioni,
+        confezionamenti e inscatolamenti. Utenti, password, gruppi,
+        sessioni e configurazioni non vengono esportati.
+    </p>
+</div>
+
+<div class="form-card">
+    <h3>Ripristina backup</h3>
+    <div class="message error">
+        Il ripristino sostituisce integralmente i dati gestionali correnti.
+        Prima dell’operazione MIRA crea automaticamente una copia di sicurezza.
+    </div>
+    <form method="post" enctype="multipart/form-data">
+        {% csrf_token %}
+        {{ form.as_p }}
+        <div class="form-actions">
+            <button type="submit" class="btn">Ripristina database</button>
+        </div>
+    </form>
+</div>
+{% endblock %}

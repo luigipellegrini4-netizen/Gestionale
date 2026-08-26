@@ -55,6 +55,12 @@ class Articolo(models.Model):
         max_length=200,
     )
 
+    nome_produzione = models.CharField(
+        max_length=200,
+        blank=True,
+        help_text="Nome semplice mostrato nelle ricette e nelle produzioni.",
+    )
+
     categoria = models.CharField(
         max_length=25,
         choices=Categoria.choices,
@@ -100,6 +106,10 @@ class Articolo(models.Model):
 
     def __str__(self):
         return f"{self.codice} - {self.descrizione}"
+
+    @property
+    def nome_per_produzione(self):
+        return self.nome_produzione or self.descrizione
 
 
 class Fornitore(models.Model):
@@ -798,3 +808,27 @@ class Inscatolamento(models.Model):
             f"{self.quantita_imballi} imballi da "
             f"{self.pezzi_per_imballo}"
         )
+
+
+class RegistroOperazione(models.Model):
+    data_ora = models.DateTimeField(auto_now_add=True, db_index=True)
+    utente = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        related_name="registro_operazioni_mira",
+        null=True,
+        blank=True,
+    )
+    azione = models.CharField(max_length=100, db_index=True)
+    area = models.CharField(max_length=100, blank=True, db_index=True)
+    descrizione = models.TextField()
+    metodo = models.CharField(max_length=10, blank=True)
+    percorso = models.CharField(max_length=500, blank=True)
+    indirizzo_ip = models.GenericIPAddressField(null=True, blank=True)
+    dettagli = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ["-data_ora", "-pk"]
+
+    def __str__(self):
+        return f"{self.data_ora} - {self.azione}"

@@ -1,0 +1,55 @@
+{% extends "magazzino/base.html" %}
+
+{% block title %}Registro operazioni - MIRA{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h2>Registro operazioni</h2>
+        <p>Attività effettuate dagli utenti in MIRA e nel Django Admin.</p>
+    </div>
+</div>
+
+<div class="form-card">
+    <form method="get" class="search-form">
+        <p><label for="id_q">Ricerca</label><input id="id_q" type="search" name="q" value="{{ query }}" placeholder="Utente, descrizione o percorso"></p>
+        <p><label for="id_area">Area</label>
+            <select id="id_area" name="area"><option value="">Tutte</option>
+                {% for area in aree %}<option value="{{ area }}" {% if area == area_selezionata %}selected{% endif %}>{{ area }}</option>{% endfor %}
+            </select>
+        </p>
+        <p><label for="id_azione">Operazione</label>
+            <select id="id_azione" name="azione"><option value="">Tutte</option>
+                {% for azione in azioni %}<option value="{{ azione }}" {% if azione == azione_selezionata %}selected{% endif %}>{{ azione }}</option>{% endfor %}
+            </select>
+        </p>
+        <p><label for="id_data_dal">Dal</label><input id="id_data_dal" type="date" name="data_dal" value="{{ data_dal }}"></p>
+        <p><label for="id_data_al">Al</label><input id="id_data_al" type="date" name="data_al" value="{{ data_al }}"></p>
+        <div class="form-actions">
+            <button type="submit" class="btn">Filtra</button>
+            <a href="{% url 'registro_operazioni' %}" class="btn btn-secondary">Azzera</a>
+        </div>
+    </form>
+</div>
+
+<div class="table-container">
+    <table>
+        <thead><tr><th>Data e ora</th><th>Utente</th><th>Area</th><th>Operazione</th><th>Descrizione</th><th>IP</th></tr></thead>
+        <tbody>
+            {% for log in logs %}
+                <tr>
+                    <td>{{ log.data_ora|date:"d/m/Y H:i:s" }}</td>
+                    <td>{% if log.utente %}{{ log.utente.get_full_name|default:log.utente.username }}{% else %}Sistema / storico{% endif %}</td>
+                    <td>{{ log.area|default:"—" }}</td>
+                    <td>{{ log.azione }}</td>
+                    <td>{{ log.descrizione }}</td>
+                    <td>{{ log.indirizzo_ip|default:"—" }}</td>
+                </tr>
+            {% empty %}
+                <tr><td colspan="6">Nessuna operazione registrata.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% include "magazzino/includes/pagination.html" %}
+{% endblock %}

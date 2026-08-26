@@ -15,6 +15,7 @@ venv/
 # Django
 db.sqlite3
 staticfiles/
+backups/
 media/
 
 # Editor e sistema operativo

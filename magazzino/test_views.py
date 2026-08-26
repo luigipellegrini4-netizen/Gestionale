@@ -14,6 +14,7 @@ from .models import (
     Inscatolamento,
     Lotto,
     Movimento,
+    Ricetta,
     Ubicazione,
 )
 
@@ -108,7 +109,7 @@ class SituazioneMagazzinoTests(TestCase):
             response = self.client.get(reverse("situazione_magazzino"))
 
         self.assertEqual(response.status_code, 200)
-        self.assertLessEqual(len(queries), 10)
+        self.assertLessEqual(len(queries), 12)
 
     def test_movimenti_sono_paginati_a_cinquanta(self):
         Movimento.objects.bulk_create(
@@ -346,4 +347,50 @@ class RicercaLottiTests(TestCase):
         self.assertContains(
             response,
             reverse("dettaglio_lotto", args=[self.lotto.pk]),
+        )
+
+
+class ElencoRicetteSeparateTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = get_user_model().objects.create_user(
+            username="ricette-separate-test",
+            password="password-di-test",
+        )
+        prodotto = Articolo.objects.create(
+            codice="PROD-RIC",
+            descrizione="Prodotto ricetta",
+            nome_produzione="Prodotto operativo",
+            categoria=Articolo.Categoria.PRODOTTO_NUDO,
+            unita_misura=Articolo.UnitaMisura.KG,
+        )
+        semilavorato = Articolo.objects.create(
+            codice="SEMI-RIC",
+            descrizione="Semilavorato ricetta",
+            categoria=Articolo.Categoria.SEMILAVORATO,
+            unita_misura=Articolo.UnitaMisura.KG,
+        )
+        cls.ricetta_prodotto = Ricetta.objects.create(
+            articolo=prodotto,
+            nome="Ricetta prodotto test",
+        )
+        cls.ricetta_semilavorato = Ricetta.objects.create(
+            articolo=semilavorato,
+            nome="Ricetta semilavorato test",
+        )
+
+    def test_ricette_sono_divise_per_tipo(self):
+        self.client.force_login(self.user)
+        response = self.client.get(reverse("elenco_ricette"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Ricette dei prodotti")
+        self.assertContains(response, "Ricette dei semilavorati")
+        self.assertEqual(
+            list(response.context["ricette_prodotti"]),
+            [self.ricetta_prodotto],
+        )
+        self.assertEqual(
+            list(response.context["ricette_semilavorati"]),
+            [self.ricetta_semilavorato],
         )

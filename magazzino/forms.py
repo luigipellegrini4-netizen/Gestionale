@@ -237,7 +237,17 @@ class ConsumoForm(forms.Form):
     )
 
 
+class ArticoloProduzioneChoiceField(forms.ModelChoiceField):
+    def label_from_instance(self, articolo):
+        return f"{articolo.codice} - {articolo.nome_per_produzione}"
+
+
 class RicettaForm(forms.ModelForm):
+
+    articolo = ArticoloProduzioneChoiceField(
+        queryset=Articolo.objects.none(),
+        label="Prodotto",
+    )
 
     class Meta:
         model = Ricetta
@@ -251,7 +261,7 @@ class RicettaForm(forms.ModelForm):
         ]
 
         labels = {
-            "articolo": "Articolo",
+            "articolo": "Prodotto",
             "nome": "Nome ricetta",
             "versione": "Versione",
             "attiva": "Ricetta attiva",
@@ -361,14 +371,14 @@ class RigaRicettaForm(forms.ModelForm):
 
 class ProduzioneForm(forms.Form):
 
-    articolo = forms.ModelChoiceField(
+    articolo = ArticoloProduzioneChoiceField(
         queryset=Articolo.objects.filter(
             categoria=Articolo.Categoria.PRODOTTO_NUDO,
             attivo=True,
         ).order_by(
             "descrizione",
         ),
-        label="Prodotto da realizzare",
+        label="Prodotto",
     )
 
     data_produzione = forms.DateField(
@@ -840,6 +850,7 @@ class ArticoloForm(forms.ModelForm):
         fields = [
             "codice",
             "descrizione",
+            "nome_produzione",
             "categoria",
             "unita_misura",
             "scorta_minima",
@@ -854,6 +865,7 @@ class ArticoloForm(forms.ModelForm):
         labels = {
             "codice": "Codice",
             "descrizione": "Descrizione",
+            "nome_produzione": "Nome prodotto in ricette e produzione",
             "categoria": "Categoria",
             "unita_misura": "Unità di misura",
             "scorta_minima": "Scorta minima",
@@ -864,3 +876,89 @@ class ArticoloForm(forms.ModelForm):
             "attivo": "Articolo attivo",
             "note": "Note",
         }
+
+
+class FornitoreForm(forms.ModelForm):
+    class Meta:
+        model = Fornitore
+        fields = [
+            "codice",
+            "ragione_sociale",
+            "partita_iva",
+            "telefono",
+            "email",
+            "indirizzo",
+            "attivo",
+            "note",
+        ]
+        labels = {
+            "codice": "Codice",
+            "ragione_sociale": "Ragione sociale",
+            "partita_iva": "Partita IVA",
+            "telefono": "Telefono",
+            "email": "Email",
+            "indirizzo": "Indirizzo",
+            "attivo": "Fornitore attivo",
+            "note": "Note",
+        }
+
+
+class UbicazioneForm(forms.ModelForm):
+    class Meta:
+        model = Ubicazione
+        fields = [
+            "nome",
+            "tipo_magazzino",
+            "scaffale",
+            "piano",
+            "attiva",
+        ]
+        labels = {
+            "nome": "Nome",
+            "tipo_magazzino": "Tipo magazzino",
+            "scaffale": "Scaffale",
+            "piano": "Piano",
+            "attiva": "Ubicazione attiva",
+        }
+
+
+class ImportazioneCSVForm(forms.Form):
+    tipo = forms.ChoiceField(
+        choices=[
+            ("fornitori", "Fornitori"),
+            ("articoli", "Articoli"),
+            ("ubicazioni", "Ubicazioni"),
+        ],
+        label="Anagrafica",
+    )
+    file_csv = forms.FileField(label="File CSV")
+
+    def clean_file_csv(self):
+        file_csv = self.cleaned_data["file_csv"]
+        if file_csv.size > 2 * 1024 * 1024:
+            raise forms.ValidationError("Il file non può superare 2 MB.")
+        if not file_csv.name.lower().endswith(".csv"):
+            raise forms.ValidationError("Seleziona un file con estensione .csv.")
+        return file_csv
+
+
+class RipristinoBackupForm(forms.Form):
+    file_json = forms.FileField(label="File backup JSON")
+    conferma = forms.CharField(
+        label="Conferma",
+        help_text="Digita RIPRISTINA per sostituire i dati gestionali correnti.",
+    )
+
+    def clean_file_json(self):
+        file_json = self.cleaned_data["file_json"]
+        if file_json.size > 20 * 1024 * 1024:
+            raise forms.ValidationError("Il backup non può superare 20 MB.")
+        if not file_json.name.lower().endswith(".json"):
+            raise forms.ValidationError("Seleziona un file .json.")
+        return file_json
+
+    def clean_conferma(self):
+        conferma = self.cleaned_data["conferma"].strip()
+        if conferma != "RIPRISTINA":
+            raise forms.ValidationError("Digita esattamente RIPRISTINA.")
+        return conferma

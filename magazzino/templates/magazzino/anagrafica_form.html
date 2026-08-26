@@ -1,0 +1,20 @@
+{% extends "magazzino/base.html" %}
+
+{% block title %}{{ titolo }} - MIRA{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div><h2>{{ titolo }}</h2></div>
+</div>
+
+<div class="form-card">
+    <form method="post">
+        {% csrf_token %}
+        {{ form.as_p }}
+        <div class="form-actions">
+            <button type="submit" class="btn">Salva</button>
+            <a href="{% url ritorno %}" class="btn btn-secondary">Annulla</a>
+        </div>
+    </form>
+</div>
+{% endblock %}

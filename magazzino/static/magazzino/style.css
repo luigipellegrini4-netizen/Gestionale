@@ -216,6 +216,37 @@ button:hover {
     background-color: #3f7566;
 }
 
+.menu-divider {
+    height: 1px;
+    margin: 10px 12px;
+    background: rgba(255, 255, 255, 0.3);
+}
+
+.sidebar-logout-form {
+    background: none;
+    padding: 0;
+    margin: 4px 0 0;
+    max-width: none;
+}
+
+.sidebar-logout {
+    display: block;
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid rgba(255, 255, 255, 0.4);
+    border-radius: 5px;
+    background: rgba(255, 255, 255, 0.08);
+    color: white;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.sidebar-logout:hover {
+    background: #3f7566;
+    border-color: rgba(255, 255, 255, 0.65);
+}
+
 /* ---------------------------------
    AREA CONTENUTO
 --------------------------------- */
@@ -568,6 +599,45 @@ button:hover {
     font-size: 28px;
 }
 
+.brand {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    color: white;
+    text-decoration: none;
+    min-width: 0;
+}
+
+.brand-logo {
+    display: block;
+    width: min(210px, 28vw);
+    height: 55px;
+    object-fit: contain;
+    background: white;
+    border-radius: 4px;
+}
+
+.brand-copy {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.brand-copy strong {
+    color: white;
+    font-size: 30px;
+    letter-spacing: 0.12em;
+    line-height: 1;
+}
+
+.brand-copy small {
+    margin-top: 8px;
+    color: #f0d9a0;
+    font-size: 12px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
 .user-menu {
     display: flex;
     align-items: center;
@@ -632,4 +702,42 @@ button:hover {
 
 .pagination a:hover {
     background: #f1f4f7;
+}
+
+@media (max-width: 850px) {
+    .site-header {
+        align-items: flex-start;
+        gap: 18px;
+    }
+
+    .brand {
+        align-items: flex-start;
+        flex-direction: column;
+        gap: 10px;
+    }
+
+    .brand-logo {
+        width: min(210px, 50vw);
+        height: auto;
+    }
+}
+
+@media (max-width: 560px) {
+    .site-header {
+        padding: 15px;
+        flex-direction: column;
+    }
+
+    .brand-logo {
+        width: 100%;
+        max-width: 210px;
+    }
+
+    .brand-copy strong {
+        font-size: 25px;
+    }
+
+    .brand-copy small {
+        font-size: 10px;
+    }
 }

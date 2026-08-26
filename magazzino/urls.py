@@ -185,4 +185,27 @@ urlpatterns = [
         views.modifica_articolo,
         name="modifica_articolo",
     ),
+    path("fornitori/", views.elenco_fornitori, name="elenco_fornitori"),
+    path("fornitori/nuovo/", views.nuovo_fornitore, name="nuovo_fornitore"),
+    path(
+        "fornitori/<int:pk>/modifica/",
+        views.modifica_fornitore,
+        name="modifica_fornitore",
+    ),
+    path("ubicazioni/", views.elenco_ubicazioni, name="elenco_ubicazioni"),
+    path("ubicazioni/nuova/", views.nuova_ubicazione, name="nuova_ubicazione"),
+    path(
+        "ubicazioni/<int:pk>/modifica/",
+        views.modifica_ubicazione,
+        name="modifica_ubicazione",
+    ),
+    path("importazioni/", views.importazione_csv, name="importazione_csv"),
+    path(
+        "importazioni/template/<str:tipo>/",
+        views.template_csv,
+        name="template_csv",
+    ),
+    path("backup/", views.gestione_backup, name="gestione_backup"),
+    path("backup/esporta/", views.esporta_backup, name="esporta_backup"),
+    path("registro-operazioni/", views.registro_operazioni, name="registro_operazioni"),
 ]

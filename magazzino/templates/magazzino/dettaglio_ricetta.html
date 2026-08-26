@@ -1,7 +1,7 @@
 {% extends "magazzino/base.html" %}
 
 {% block title %}
-{{ ricetta.nome }} - Gestionale Marmellate
+{{ ricetta.nome }} - MIRA
 {% endblock %}
 
 {% block content %}
@@ -14,7 +14,7 @@
         <p>
             {{ ricetta.articolo.codice }}
             -
-            {{ ricetta.articolo.descrizione }}
+            {{ ricetta.articolo.nome_per_produzione }}
         </p>
     </div>
 
@@ -43,10 +43,10 @@
     <h3>Dati ricetta</h3>
 
     <p>
-        <strong>Articolo:</strong>
+        <strong>Prodotto:</strong>
         {{ ricetta.articolo.codice }}
         -
-        {{ ricetta.articolo.descrizione }}
+        {{ ricetta.articolo.nome_per_produzione }}
     </p>
 
     <p>

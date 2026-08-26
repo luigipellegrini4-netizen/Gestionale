@@ -5,13 +5,21 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="stylesheet" href="{% static 'magazzino/style.css' %}">
-    <title>{% block title %}Gestionale Marmellate{% endblock %}</title>
+    <title>{% block title %}MIRA{% endblock %}</title>
 </head>
 <body>
     <header class="site-header">
-        <div>
-            <h1>Gestionale</h1>
-        </div>
+        <a href="{% url 'home' %}" class="brand" aria-label="MIRA - Home">
+            <img
+                src="{% static 'magazzino/logo-conserveria.jpg' %}"
+                alt="Conserveria Solidale - Mirabilia Dei Cooperativa Sociale"
+                class="brand-logo"
+            >
+            <span class="brand-copy">
+                <strong>MIRA</strong>
+                <small>Mirabilia Integrated Resource &amp; Automation</small>
+            </span>
+        </a>
 
         <div class="user-menu">
             {% if user.is_authenticated %}
@@ -66,9 +74,18 @@
                     Ricerca lotti
                 </a>
 
-                <a href="{% url 'elenco_articoli' %}">
-                    Articoli
-                </a>
+            </div>
+
+            <div class="menu-section">
+                <div class="menu-title">ANAGRAFICHE</div>
+
+                <a href="{% url 'elenco_articoli' %}">Articoli</a>
+
+                {% if perms.magazzino.operare_magazzino %}
+                    <a href="{% url 'elenco_fornitori' %}">Fornitori</a>
+                    <a href="{% url 'elenco_ubicazioni' %}">Ubicazioni</a>
+                    <a href="{% url 'importazione_csv' %}">Importazione CSV</a>
+                {% endif %}
             </div>
 
 
@@ -87,6 +104,8 @@
                     Produzioni semilavorati
                 </a>
 
+                <div class="menu-divider" role="separator"></div>
+
                 {% if perms.magazzino.operare_magazzino %}
                     <a href="{% url 'nuova_produzione' %}">
                         Nuova produzione
@@ -97,6 +116,8 @@
                     Produzioni
                 </a>
 
+                <div class="menu-divider" role="separator"></div>
+
                 {% if perms.magazzino.operare_magazzino %}
                     <a href="{% url 'nuovo_confezionamento' %}">
                         Nuovo confezionamento
@@ -106,6 +127,8 @@
                         Nuovo inscatolamento
                     </a>
                 {% endif %}
+
+                <div class="menu-divider" role="separator"></div>
 
                 <a href="{% url 'elenco_ricette' %}">
                     Ricette
@@ -129,6 +152,15 @@
                         Amministrazione
                     </a>
                 {% endif %}
+
+                {% if user.is_superuser %}
+                    <a href="{% url 'registro_operazioni' %}">
+                        Registro operazioni
+                    </a>
+                    <a href="{% url 'gestione_backup' %}">
+                        Backup database
+                    </a>
+                {% endif %}
             </div>
 
 
@@ -143,11 +175,12 @@
                         👤 {{ user.username }}
                     </div>
 
-                    <form method="post" action="{% url 'logout' %}">
+                    <form method="post" action="{% url 'logout' %}"
+                          class="sidebar-logout-form">
                         {% csrf_token %}
 
-                        <button type="submit" class="logout-link">
-                            Esci
+                        <button type="submit" class="sidebar-logout">
+                            <span aria-hidden="true">⇥</span> Esci
                         </button>
                     </form>
 

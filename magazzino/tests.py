@@ -16,7 +16,7 @@ class AuthenticationTests(TestCase):
         response = self.client.get(reverse("login"))
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Accedi al gestionale")
+        self.assertContains(response, "Accedi a MIRA")
 
     def test_anonymous_user_is_redirected_to_login(self):
         target = reverse("situazione_magazzino")

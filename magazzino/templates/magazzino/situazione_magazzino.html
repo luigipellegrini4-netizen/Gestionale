@@ -1,7 +1,7 @@
 {% extends "magazzino/base.html" %}
 
 {% block title %}
-Situazione magazzino - Gestionale Marmellate
+Situazione magazzino - MIRA
 {% endblock %}
 
 {% block content %}
@@ -13,6 +13,16 @@ Situazione magazzino - Gestionale Marmellate
             Giacenze complessive per articolo e dettaglio per lotto e ubicazione.
         </p>
     </div>
+    {% if perms.magazzino.operare_magazzino %}
+        <div class="page-actions">
+            <a href="{% url 'nuovo_carico' %}" class="btn">
+                Nuovo carico
+            </a>
+            <a href="{% url 'trasferimento' %}" class="btn">
+                Trasferimento
+            </a>
+        </div>
+    {% endif %}
 </div>
 
 
@@ -82,6 +92,17 @@ Situazione magazzino - Gestionale Marmellate
 
 </div>
 
+{% if articoli.paginator.num_pages > 1 %}
+    <nav class="pagination" aria-label="Pagine articoli">
+        {% if articoli.has_previous %}
+            <a href="?articoli_page={{ articoli.previous_page_number }}&giacenze_page={{ giacenze.number }}">Precedente</a>
+        {% endif %}
+        <span>Pagina {{ articoli.number }} di {{ articoli.paginator.num_pages }}</span>
+        {% if articoli.has_next %}
+            <a href="?articoli_page={{ articoli.next_page_number }}&giacenze_page={{ giacenze.number }}">Successiva</a>
+        {% endif %}
+    </nav>
+{% endif %}
 
 <h3>Dettaglio giacenze per lotto</h3>
 
@@ -176,23 +197,16 @@ Situazione magazzino - Gestionale Marmellate
 
 </div>
 
-
-{% if perms.magazzino.operare_magazzino %}
-<div class="page-actions">
-
-    <a href="{% url 'nuovo_carico' %}" class="btn">
-        Nuovo carico
-    </a>
-
-    <a href="{% url 'trasferimento' %}" class="btn">
-        Trasferimento
-    </a>
-
-    <a href="{% url 'consumo' %}" class="btn">
-        Consumo (togliere?)
-    </a>
-
-</div>
+{% if giacenze.paginator.num_pages > 1 %}
+    <nav class="pagination" aria-label="Pagine giacenze">
+        {% if giacenze.has_previous %}
+            <a href="?articoli_page={{ articoli.number }}&giacenze_page={{ giacenze.previous_page_number }}">Precedente</a>
+        {% endif %}
+        <span>Pagina {{ giacenze.number }} di {{ giacenze.paginator.num_pages }}</span>
+        {% if giacenze.has_next %}
+            <a href="?articoli_page={{ articoli.number }}&giacenze_page={{ giacenze.next_page_number }}">Successiva</a>
+        {% endif %}
+    </nav>
 {% endif %}
 
 {% endblock %}

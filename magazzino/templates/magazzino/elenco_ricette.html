@@ -1,7 +1,7 @@
 {% extends "magazzino/base.html" %}
 
 {% block title %}
-Ricette - Gestionale Marmellate
+Ricette - MIRA
 {% endblock %}
 
 {% block content %}
@@ -26,89 +26,40 @@ Ricette - Gestionale Marmellate
 
 </div>
 
-{% if ricette %}
+<section class="card">
+    <h3>Ricette dei prodotti</h3>
+    <p>Ricette utilizzate per realizzare i prodotti destinati al confezionamento.</p>
+    {% include "magazzino/includes/tabella_ricette.html" with ricette=ricette_prodotti %}
 
-<div class="table-container">
+    {% if ricette_prodotti.paginator.num_pages > 1 %}
+        <nav class="pagination" aria-label="Pagine ricette prodotti">
+            {% if ricette_prodotti.has_previous %}
+                <a href="?prodotti_page={{ ricette_prodotti.previous_page_number }}&semilavorati_page={{ ricette_semilavorati.number }}">Precedente</a>
+            {% endif %}
+            <span>Pagina {{ ricette_prodotti.number }} di {{ ricette_prodotti.paginator.num_pages }}</span>
+            {% if ricette_prodotti.has_next %}
+                <a href="?prodotti_page={{ ricette_prodotti.next_page_number }}&semilavorati_page={{ ricette_semilavorati.number }}">Successiva</a>
+            {% endif %}
+        </nav>
+    {% endif %}
+</section>
 
-    <table>
+<section class="card">
+    <h3>Ricette dei semilavorati</h3>
+    <p>Ricette per basi, preparazioni intermedie e altri semilavorati.</p>
+    {% include "magazzino/includes/tabella_ricette.html" with ricette=ricette_semilavorati %}
 
-        <thead>
-            <tr>
-                <th>Articolo</th>
-                <th>Ricetta</th>
-                <th>Versione</th>
-                <th>Stato</th>
-                <th>Azioni</th>
-            </tr>
-        </thead>
-
-        <tbody>
-
-            {% for ricetta in ricette %}
-
-            <tr>
-
-                <td>
-                    {{ ricetta.articolo.codice }}
-                    -
-                    {{ ricetta.articolo.descrizione }}
-                </td>
-
-                <td>
-                    {{ ricetta.nome }}
-                </td>
-
-                <td>
-                    {{ ricetta.versione }}
-                </td>
-
-                <td>
-
-                    {% if ricetta.attiva %}
-                        <span class="badge badge-success">
-                            Attiva
-                        </span>
-                    {% else %}
-                        <span class="badge badge-danger">
-                            Non attiva
-                        </span>
-                    {% endif %}
-
-                </td>
-
-                <td>
-
-                    <a
-                        href="{% url 'dettaglio_ricetta' ricetta.pk %}"
-                        class="btn"
-                    >
-                        Dettaglio
-                    </a>
-
-                </td>
-
-            </tr>
-
-            {% endfor %}
-
-        </tbody>
-
-    </table>
-
-</div>
-
-{% else %}
-
-<div class="card">
-
-    <p>
-        Non ci sono ricette disponibili.
-    </p>
-
-</div>
-
-{% endif %}
-
-{% include "magazzino/includes/pagination.html" %}
+    {% if ricette_semilavorati.paginator.num_pages > 1 %}
+        <nav class="pagination" aria-label="Pagine ricette semilavorati">
+            {% if ricette_semilavorati.has_previous %}
+                <a href="?prodotti_page={{ ricette_prodotti.number }}&semilavorati_page={{ ricette_semilavorati.previous_page_number }}">Precedente</a>
+            {% endif %}
+            <span>Pagina {{ ricette_semilavorati.number }} di {{ ricette_semilavorati.paginator.num_pages }}</span>
+            {% if ricette_semilavorati.has_next %}
+                <a href="?prodotti_page={{ ricette_prodotti.number }}&semilavorati_page={{ ricette_semilavorati.next_page_number }}">Successiva</a>
+            {% endif %}
+        </nav>
+    {% endif %}
+</section>
 
 {% endblock %}

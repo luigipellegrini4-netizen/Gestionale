@@ -1,11 +1,12 @@
+from datetime import datetime
 from decimal import Decimal
 
 from django.contrib import messages
-from django.contrib.auth.decorators import permission_required
+from django.contrib.auth.decorators import permission_required, user_passes_test
 from django.db.models import OuterRef, Q, Subquery, Sum
 from django.core.paginator import Paginator
 from django.shortcuts import get_object_or_404, redirect, render
-from django.http import JsonResponse
+from django.http import HttpResponse, JsonResponse
 
 from .forms import (
     CaricoLottoForm,
@@ -23,6 +24,10 @@ from .forms import (
     IngredienteSemilavoratoForm,
     ConfermaProduzioneSemilavoratoForm,
     ArticoloForm,
+    FornitoreForm,
+    UbicazioneForm,
+    ImportazioneCSVForm,
+    RipristinoBackupForm,
 )
 
 from .services import (
@@ -52,7 +57,14 @@ from .models import (
     Inscatolamento,
     Produzione,
     ProduzioneSemilavorato,
+    Fornitore,
+    Ubicazione,
+    RegistroOperazione,
 )
+
+from .csv_import import genera_template_csv, importa_csv
+from .backup_db import crea_backup, ripristina_backup
+from .audit import registra_operazione
 
 
 @permission_required("magazzino.operare_magazzino", raise_exception=True)
@@ -170,28 +182,29 @@ def disponibilita_trasferimento(request):
 
 
 def situazione_magazzino(request):
-    articoli = list(
-        Articolo.objects.all().order_by(
-            "descrizione",
-        )
-    )
+    articoli = Paginator(
+        Articolo.objects.all().order_by("descrizione"),
+        50,
+    ).get_page(request.GET.get("articoli_page"))
+    articoli.object_list = list(articoli.object_list)
+    articolo_ids = [articolo.pk for articolo in articoli.object_list]
 
     totali_articolo = {
         riga["lotto__articolo_id"]: riga["totale"]
         for riga in (
-            Giacenza.objects
+            Giacenza.objects.filter(lotto__articolo_id__in=articolo_ids)
             .values("lotto__articolo_id")
             .annotate(totale=Sum("quantita"))
         )
     }
 
-    for articolo in articoli:
+    for articolo in articoli.object_list:
         articolo.giacenza_totale = totali_articolo.get(
             articolo.pk,
             Decimal("0"),
         )
 
-    giacenze = list(
+    giacenze = Paginator(
         Giacenza.objects.select_related(
             "lotto__articolo",
             "ubicazione",
@@ -201,16 +214,19 @@ def situazione_magazzino(request):
             "lotto__articolo__descrizione",
             "lotto__codice_lotto",
             "ubicazione__nome",
-        )
-    )
+        ),
+        50,
+    ).get_page(request.GET.get("giacenze_page"))
+    giacenze.object_list = list(giacenze.object_list)
 
-    lotto_ids = {giacenza.lotto_id for giacenza in giacenze}
+    lotto_ids = {
+        giacenza.lotto_id for giacenza in giacenze.object_list
+    }
 
     totali_lotto = {
         riga["lotto_id"]: riga["totale"]
         for riga in (
-            Giacenza.objects
-            .filter(lotto_id__in=lotto_ids)
+            Giacenza.objects.filter(lotto_id__in=lotto_ids)
             .values("lotto_id")
             .annotate(totale=Sum("quantita"))
         )
@@ -219,14 +235,13 @@ def situazione_magazzino(request):
     totali_inscatolati = {
         riga["lotto_prodotto_id"]: riga["totale"]
         for riga in (
-            Inscatolamento.objects
-            .filter(lotto_prodotto_id__in=lotto_ids)
+            Inscatolamento.objects.filter(lotto_prodotto_id__in=lotto_ids)
             .values("lotto_prodotto_id")
             .annotate(totale=Sum("quantita_prodotti"))
         )
     }
 
-    for giacenza in giacenze:
+    for giacenza in giacenze.object_list:
         lotto = giacenza.lotto
         giacenza.quantita_totale = totali_lotto.get(
             lotto.pk,
@@ -237,8 +252,7 @@ def situazione_magazzino(request):
             Decimal("0"),
         )
         giacenza.quantita_sfusa = (
-            giacenza.quantita_totale
-            - giacenza.quantita_inscatolata
+            giacenza.quantita_totale - giacenza.quantita_inscatolata
         )
 
     return render(
@@ -779,16 +793,238 @@ def elenco_ricette(request):
         "articolo__descrizione",
         "versione",
     )
-    ricette = Paginator(ricette_queryset, 50).get_page(
-        request.GET.get("page")
-    )
+    ricette_prodotti = Paginator(
+        ricette_queryset.filter(
+            articolo__categoria=Articolo.Categoria.PRODOTTO_NUDO,
+        ),
+        50,
+    ).get_page(request.GET.get("prodotti_page"))
+    ricette_semilavorati = Paginator(
+        ricette_queryset.filter(
+            articolo__categoria=Articolo.Categoria.SEMILAVORATO,
+        ),
+        50,
+    ).get_page(request.GET.get("semilavorati_page"))
 
     return render(
         request,
         "magazzino/elenco_ricette.html",
         {
-            "ricette": ricette,
-            "page_obj": ricette,
+            "ricette_prodotti": ricette_prodotti,
+            "ricette_semilavorati": ricette_semilavorati,
+        },
+    )
+
+
+@permission_required("magazzino.operare_magazzino", raise_exception=True)
+def elenco_fornitori(request):
+    fornitori = Paginator(
+        Fornitore.objects.all().order_by("codice"), 50
+    ).get_page(request.GET.get("page"))
+    return render(
+        request,
+        "magazzino/elenco_fornitori.html",
+        {"fornitori": fornitori, "page_obj": fornitori},
+    )
+
+
+@permission_required("magazzino.operare_magazzino", raise_exception=True)
+def nuovo_fornitore(request):
+    form = FornitoreForm(request.POST or None)
+    if request.method == "POST" and form.is_valid():
+        form.save()
+        messages.success(request, "Fornitore creato correttamente.")
+        return redirect("elenco_fornitori")
+    return render(
+        request,
+        "magazzino/anagrafica_form.html",
+        {"form": form, "titolo": "Nuovo fornitore", "ritorno": "elenco_fornitori"},
+    )
+
+
+@permission_required("magazzino.operare_magazzino", raise_exception=True)
+def modifica_fornitore(request, pk):
+    fornitore = get_object_or_404(Fornitore, pk=pk)
+    form = FornitoreForm(request.POST or None, instance=fornitore)
+    if request.method == "POST" and form.is_valid():
+        form.save()
+        messages.success(request, "Fornitore aggiornato correttamente.")
+        return redirect("elenco_fornitori")
+    return render(
+        request,
+        "magazzino/anagrafica_form.html",
+        {"form": form, "titolo": "Modifica fornitore", "ritorno": "elenco_fornitori"},
+    )
+
+
+@permission_required("magazzino.operare_magazzino", raise_exception=True)
+def elenco_ubicazioni(request):
+    ubicazioni = Paginator(
+        Ubicazione.objects.all().order_by("nome"), 50
+    ).get_page(request.GET.get("page"))
+    return render(
+        request,
+        "magazzino/elenco_ubicazioni.html",
+        {"ubicazioni": ubicazioni, "page_obj": ubicazioni},
+    )
+
+
+@permission_required("magazzino.operare_magazzino", raise_exception=True)
+def nuova_ubicazione(request):
+    form = UbicazioneForm(request.POST or None)
+    if request.method == "POST" and form.is_valid():
+        form.save()
+        messages.success(request, "Ubicazione creata correttamente.")
+        return redirect("elenco_ubicazioni")
+    return render(
+        request,
+        "magazzino/anagrafica_form.html",
+        {"form": form, "titolo": "Nuova ubicazione", "ritorno": "elenco_ubicazioni"},
+    )
+
+
+@permission_required("magazzino.operare_magazzino", raise_exception=True)
+def modifica_ubicazione(request, pk):
+    ubicazione = get_object_or_404(Ubicazione, pk=pk)
+    form = UbicazioneForm(request.POST or None, instance=ubicazione)
+    if request.method == "POST" and form.is_valid():
+        form.save()
+        messages.success(request, "Ubicazione aggiornata correttamente.")
+        return redirect("elenco_ubicazioni")
+    return render(
+        request,
+        "magazzino/anagrafica_form.html",
+        {"form": form, "titolo": "Modifica ubicazione", "ritorno": "elenco_ubicazioni"},
+    )
+
+
+@permission_required("magazzino.operare_magazzino", raise_exception=True)
+def importazione_csv(request):
+    risultato = None
+    form = ImportazioneCSVForm(request.POST or None, request.FILES or None)
+    if request.method == "POST" and form.is_valid():
+        try:
+            risultato = importa_csv(
+                form.cleaned_data["tipo"],
+                form.cleaned_data["file_csv"].read(),
+            )
+        except ValueError as errore:
+            risultato = {
+                "errori": [str(errore)],
+                "creati": 0,
+                "aggiornati": 0,
+            }
+        if not risultato["errori"]:
+            messages.success(
+                request,
+                f"Importazione completata: {risultato['creati']} creati, "
+                f"{risultato['aggiornati']} aggiornati.",
+            )
+            return redirect("importazione_csv")
+    return render(
+        request,
+        "magazzino/importazione_csv.html",
+        {"form": form, "risultato": risultato},
+    )
+
+
+@permission_required("magazzino.operare_magazzino", raise_exception=True)
+def template_csv(request, tipo):
+    try:
+        contenuto = genera_template_csv(tipo)
+    except KeyError:
+        return HttpResponse("Tipo non valido.", status=404)
+    response = HttpResponse(contenuto, content_type="text/csv; charset=utf-8")
+    response["Content-Disposition"] = f'attachment; filename="template-{tipo}.csv"'
+    return response
+
+
+@user_passes_test(lambda user: user.is_superuser)
+def gestione_backup(request):
+    form = RipristinoBackupForm(request.POST or None, request.FILES or None)
+    risultato = None
+    if request.method == "POST" and form.is_valid():
+        try:
+            risultato = ripristina_backup(
+                form.cleaned_data["file_json"].read()
+            )
+        except ValueError as errore:
+            form.add_error("file_json", str(errore))
+        else:
+            messages.success(
+                request,
+                f"Backup ripristinato: {risultato['record']} record. "
+                f"Copia precedente: {risultato['backup_precedente']}.",
+            )
+            return redirect("gestione_backup")
+    return render(
+        request,
+        "magazzino/gestione_backup.html",
+        {"form": form, "risultato": risultato},
+    )
+
+
+@user_passes_test(lambda user: user.is_superuser)
+def esporta_backup(request):
+    registra_operazione(
+        utente=request.user,
+        azione="Esportazione backup",
+        area="Amministrazione",
+        descrizione="Esportazione completa dei dati gestionali",
+        request=request,
+    )
+    contenuto = crea_backup()
+    nome = datetime.now().strftime("mira-backup-%Y%m%d-%H%M%S.json")
+    response = HttpResponse(
+        contenuto,
+        content_type="application/json; charset=utf-8",
+    )
+    response["Content-Disposition"] = f'attachment; filename="{nome}"'
+    return response
+
+
+@user_passes_test(lambda user: user.is_superuser)
+def registro_operazioni(request):
+    logs = RegistroOperazione.objects.select_related("utente")
+    query = request.GET.get("q", "").strip()
+    area = request.GET.get("area", "").strip()
+    azione = request.GET.get("azione", "").strip()
+    data_dal = request.GET.get("data_dal", "").strip()
+    data_al = request.GET.get("data_al", "").strip()
+    if query:
+        logs = logs.filter(
+            Q(descrizione__icontains=query)
+            | Q(utente__username__icontains=query)
+            | Q(percorso__icontains=query)
+        )
+    if area:
+        logs = logs.filter(area=area)
+    if azione:
+        logs = logs.filter(azione=azione)
+    if data_dal:
+        logs = logs.filter(data_ora__date__gte=data_dal)
+    if data_al:
+        logs = logs.filter(data_ora__date__lte=data_al)
+    aree = RegistroOperazione.objects.order_by("area").values_list(
+        "area", flat=True
+    ).distinct()
+    azioni = RegistroOperazione.objects.order_by("azione").values_list(
+        "azione", flat=True
+    ).distinct()
+    pagina = Paginator(logs, 100).get_page(request.GET.get("page"))
+    return render(
+        request,
+        "magazzino/registro_operazioni.html",
+        {
+            "logs": pagina,
+            "page_obj": pagina,
+            "query": query,
+            "area_selezionata": area,
+            "azione_selezionata": azione,
+            "data_dal": data_dal,
+            "data_al": data_al,
+            "aree": aree,
+            "azioni": azioni,
         },
     )
 
