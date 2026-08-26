@@ -1,3 +1,4 @@
+from datetime import date
 from decimal import Decimal
 
 from django.contrib.auth import get_user_model
@@ -12,6 +13,10 @@ from .models import (
     Inscatolamento,
     Lotto,
     Movimento,
+    PrelievoProduzione,
+    PrelievoProduzioneSemilavorato,
+    Produzione,
+    ProduzioneSemilavorato,
     Ricetta,
     RigaRicetta,
     Ubicazione,
@@ -19,6 +24,8 @@ from .models import (
 from .services import (
     avvia_produzione,
     conferma_produzione,
+    elimina_produzione_bozza,
+    elimina_produzione_semilavorato_bozza,
     registra_carico,
     registra_confezionamento,
     registra_consumo,
@@ -175,6 +182,112 @@ class VincoliQuantitaTests(TestCase):
                 ubicazione=self.ubicazione,
                 quantita=Decimal("-1"),
             )
+
+
+class EliminazioneProduzioniBozzaTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.operatore = get_user_model().objects.create_user(
+            username="annullamento-produzione",
+            password="password-di-test",
+        )
+        cls.ingrediente = Articolo.objects.create(
+            codice="ING-ANN",
+            descrizione="Ingrediente annullamento",
+            categoria=Articolo.Categoria.MATERIA_PRIMA,
+            unita_misura=Articolo.UnitaMisura.KG,
+        )
+        cls.prodotto = Articolo.objects.create(
+            codice="NUDO-ANN",
+            descrizione="Prodotto nudo annullamento",
+            categoria=Articolo.Categoria.PRODOTTO_NUDO,
+            unita_misura=Articolo.UnitaMisura.KG,
+        )
+        cls.semilavorato = Articolo.objects.create(
+            codice="SEMI-ANN",
+            descrizione="Semilavorato annullamento",
+            categoria=Articolo.Categoria.SEMILAVORATO,
+            unita_misura=Articolo.UnitaMisura.KG,
+        )
+        cls.ubicazione = Ubicazione.objects.create(
+            nome="Origine annullamento",
+            tipo_magazzino=Ubicazione.TipoMagazzino.MP,
+        )
+        cls.lotto = Lotto.objects.create(
+            articolo=cls.ingrediente,
+            codice_lotto="LOT-ANN",
+            tipo=Lotto.Tipo.ACQUISTO,
+            quantita_iniziale=Decimal("20"),
+        )
+
+    def setUp(self):
+        self.giacenza = Giacenza.objects.create(
+            lotto=self.lotto,
+            ubicazione=self.ubicazione,
+            quantita=Decimal("15"),
+        )
+
+    def test_eliminazione_bozza_ripristina_i_prelievi(self):
+        produzione = Produzione.objects.create(
+            articolo=self.prodotto,
+            data_produzione=date.today(),
+        )
+        PrelievoProduzione.objects.create(
+            produzione=produzione,
+            lotto=self.lotto,
+            ubicazione_origine=self.ubicazione,
+            quantita_prelevata=Decimal("5"),
+        )
+
+        elimina_produzione_bozza(produzione, operatore=self.operatore)
+
+        self.giacenza.refresh_from_db()
+        self.assertEqual(self.giacenza.quantita, Decimal("20"))
+        self.assertFalse(Produzione.objects.filter(pk=produzione.pk).exists())
+        rettifica = Movimento.objects.get(tipo=Movimento.Tipo.RETTIFICA)
+        self.assertEqual(rettifica.quantita, Decimal("5"))
+        self.assertEqual(rettifica.eseguito_da, self.operatore)
+
+    def test_eliminazione_bozza_semilavorato_ripristina_i_prelievi(self):
+        produzione = ProduzioneSemilavorato.objects.create(
+            articolo=self.semilavorato,
+            data_produzione=date.today(),
+        )
+        PrelievoProduzioneSemilavorato.objects.create(
+            produzione=produzione,
+            lotto=self.lotto,
+            ubicazione_origine=self.ubicazione,
+            quantita_prelevata=Decimal("5"),
+        )
+
+        elimina_produzione_semilavorato_bozza(
+            produzione,
+            operatore=self.operatore,
+        )
+
+        self.giacenza.refresh_from_db()
+        self.assertEqual(self.giacenza.quantita, Decimal("20"))
+        self.assertFalse(
+            ProduzioneSemilavorato.objects.filter(pk=produzione.pk).exists()
+        )
+        self.assertTrue(
+            Movimento.objects.filter(
+                tipo=Movimento.Tipo.RETTIFICA,
+                quantita=Decimal("5"),
+            ).exists()
+        )
+
+    def test_produzione_confermata_non_puo_essere_eliminata(self):
+        produzione = Produzione.objects.create(
+            articolo=self.prodotto,
+            data_produzione=date.today(),
+            stato=Produzione.Stato.CONFERMATA,
+        )
+
+        with self.assertRaisesMessage(ValueError, "solo una produzione in bozza"):
+            elimina_produzione_bozza(produzione)
+
+        self.assertTrue(Produzione.objects.filter(pk=produzione.pk).exists())
 
 
 class ConfermaProduzioneTests(TestCase):
