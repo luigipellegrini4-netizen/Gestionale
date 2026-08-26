@@ -1,0 +1,38 @@
+{% extends "magazzino/base.html" %}
+
+{% block title %}Elimina produzione - Gestionale Marmellate{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h2>Elimina produzione in bozza</h2>
+        <p>Questa operazione annulla la bozza e ripristina le quantità prelevate.</p>
+    </div>
+</div>
+
+<div class="form-card">
+    <p>
+        Confermi l’eliminazione della produzione
+        <strong>{{ produzione.articolo.codice }} — {{ produzione.articolo.descrizione }}</strong>
+        del {{ produzione.data_produzione|date:"d/m/Y" }}?
+    </p>
+    <p>
+        Gli eventuali prelievi saranno restituiti alle ubicazioni di origine
+        e registrati come movimenti di rettifica.
+    </p>
+
+    <form method="post">
+        {% csrf_token %}
+        <div class="form-actions">
+            <button type="submit" class="btn">Conferma eliminazione</button>
+            {% if tipo == "semilavorato" %}
+                <a href="{% url 'gestione_produzione_semilavorato' produzione.pk %}"
+                   class="btn btn-secondary">Annulla</a>
+            {% else %}
+                <a href="{% url 'gestione_produzione' produzione.pk %}"
+                   class="btn btn-secondary">Annulla</a>
+            {% endif %}
+        </div>
+    </form>
+</div>
+{% endblock %}

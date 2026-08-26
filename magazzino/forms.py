@@ -6,6 +6,7 @@ from .models import (
     Fornitore,
     Ubicazione,
     Lotto,
+    Giacenza,
     Ricetta,
     RigaRicetta,
 )
@@ -95,22 +96,17 @@ class CaricoLottoForm(forms.Form):
 
 class TrasferimentoForm(forms.Form):
 
-    lotto = forms.ModelChoiceField(
-        queryset=Lotto.objects.select_related(
-            "articolo",
-        ).order_by(
-            "codice_lotto",
+    articolo = forms.ModelChoiceField(
+        queryset=Articolo.objects.filter(attivo=True).order_by(
+            "codice",
         ),
-        label="Lotto",
+        label="Articolo da trasferire",
     )
 
-    ubicazione_origine = forms.ModelChoiceField(
-        queryset=Ubicazione.objects.filter(
-            attiva=True,
-        ).order_by(
-            "nome",
-        ),
-        label="Ubicazione origine",
+    giacenza = forms.ModelChoiceField(
+        queryset=Giacenza.objects.none(),
+        label="Lotto e posizione di origine",
+        empty_label="Seleziona prima un articolo",
     )
 
     ubicazione_destinazione = forms.ModelChoiceField(
@@ -138,6 +134,63 @@ class TrasferimentoForm(forms.Form):
             },
         ),
     )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        articolo_id = self.data.get("articolo") or self.initial.get(
+            "articolo"
+        )
+        if articolo_id:
+            try:
+                articolo_id = int(articolo_id)
+            except (TypeError, ValueError):
+                pass
+            else:
+                self.fields["giacenza"].queryset = (
+                    Giacenza.objects.select_related(
+                        "lotto__articolo",
+                        "ubicazione",
+                    )
+                    .filter(
+                        lotto__articolo_id=articolo_id,
+                        quantita__gt=0,
+                        ubicazione__attiva=True,
+                    )
+                    .order_by("lotto__codice_lotto", "ubicazione__nome")
+                )
+
+    def clean(self):
+        cleaned_data = super().clean()
+        articolo = cleaned_data.get("articolo")
+        giacenza = cleaned_data.get("giacenza")
+        destinazione = cleaned_data.get("ubicazione_destinazione")
+        quantita = cleaned_data.get("quantita")
+
+        if (
+            articolo
+            and giacenza
+            and giacenza.lotto.articolo_id != articolo.pk
+        ):
+            self.add_error(
+                "giacenza",
+                "Il lotto non appartiene all'articolo selezionato.",
+            )
+        if giacenza and giacenza.quantita <= 0:
+            self.add_error(
+                "giacenza",
+                "Il lotto selezionato non ha giacenza disponibile.",
+            )
+        if giacenza and destinazione == giacenza.ubicazione:
+            self.add_error(
+                "ubicazione_destinazione",
+                "Il magazzino di destinazione deve essere diverso dall'origine.",
+            )
+        if giacenza and quantita and quantita > giacenza.quantita:
+            self.add_error(
+                "quantita",
+                f"Disponibilità insufficiente: massimo {giacenza.quantita}.",
+            )
+        return cleaned_data
 
 
 class ConsumoForm(forms.Form):

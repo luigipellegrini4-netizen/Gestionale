@@ -408,6 +408,41 @@ def registra_prelievi_produzione(
 
 
 @transaction.atomic
+def elimina_produzione_bozza(produzione, operatore=None):
+    if not isinstance(produzione, Produzione):
+        raise ValueError("La produzione non è valida.")
+
+    produzione = Produzione.objects.select_for_update().get(pk=produzione.pk)
+    if produzione.stato != Produzione.Stato.BOZZA:
+        raise ValueError("È possibile eliminare solo una produzione in bozza.")
+
+    prelievi = list(
+        produzione.prelievi.select_related(
+            "lotto", "ubicazione_origine"
+        ).select_for_update()
+    )
+    for prelievo in prelievi:
+        giacenza, _ = Giacenza.objects.select_for_update().get_or_create(
+            lotto=prelievo.lotto,
+            ubicazione=prelievo.ubicazione_origine,
+            defaults={"quantita": Decimal("0")},
+        )
+        giacenza.quantita += prelievo.quantita_prelevata
+        giacenza.save(update_fields=["quantita"])
+        Movimento.objects.create(
+            tipo=Movimento.Tipo.RETTIFICA,
+            lotto=prelievo.lotto,
+            quantita=prelievo.quantita_prelevata,
+            ubicazione_destinazione=prelievo.ubicazione_origine,
+            causale="Annullamento produzione in bozza",
+            note=f"Produzione annullata n. {produzione.pk}",
+            eseguito_da=operatore,
+        )
+
+    produzione.delete()
+
+
+@transaction.atomic
 def registra_scarto_prelievo_produzione(
     prelievo,
     quantita_scarto,
@@ -1271,6 +1306,48 @@ def registra_prelievi_semilavorato(
         prelievi.append(prelievo)
 
     return prelievi
+
+
+@transaction.atomic
+def elimina_produzione_semilavorato_bozza(produzione, operatore=None):
+    from .models import ProduzioneSemilavorato
+
+    if not isinstance(produzione, ProduzioneSemilavorato):
+        raise ValueError("La produzione semilavorato non è valida.")
+
+    produzione = (
+        ProduzioneSemilavorato.objects.select_for_update()
+        .get(pk=produzione.pk)
+    )
+    if produzione.stato != ProduzioneSemilavorato.Stato.BOZZA:
+        raise ValueError(
+            "È possibile eliminare solo una produzione semilavorato in bozza."
+        )
+
+    prelievi = list(
+        produzione.prelievi.select_related(
+            "lotto", "ubicazione_origine"
+        ).select_for_update()
+    )
+    for prelievo in prelievi:
+        giacenza, _ = Giacenza.objects.select_for_update().get_or_create(
+            lotto=prelievo.lotto,
+            ubicazione=prelievo.ubicazione_origine,
+            defaults={"quantita": Decimal("0")},
+        )
+        giacenza.quantita += prelievo.quantita_prelevata
+        giacenza.save(update_fields=["quantita"])
+        Movimento.objects.create(
+            tipo=Movimento.Tipo.RETTIFICA,
+            lotto=prelievo.lotto,
+            quantita=prelievo.quantita_prelevata,
+            ubicazione_destinazione=prelievo.ubicazione_origine,
+            causale="Annullamento produzione semilavorato in bozza",
+            note=f"Produzione semilavorato annullata n. {produzione.pk}",
+            eseguito_da=operatore,
+        )
+
+    produzione.delete()
 
 
 @transaction.atomic

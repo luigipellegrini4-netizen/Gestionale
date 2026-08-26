@@ -27,7 +27,8 @@ Trasferimento - Gestionale Marmellate
 
 {% endif %}
 
-<form method="post">
+<form method="post" id="trasferimento-form"
+      data-disponibilita-url="{% url 'disponibilita_trasferimento' %}">
 
     {% csrf_token %}
 
@@ -48,5 +49,67 @@ Trasferimento - Gestionale Marmellate
 </form>
 
 </div>
+
+<script>
+(() => {
+    const form = document.getElementById("trasferimento-form");
+    const articolo = document.getElementById("id_articolo");
+    const giacenza = document.getElementById("id_giacenza");
+    const destinazione = document.getElementById("id_ubicazione_destinazione");
+    const quantita = document.getElementById("id_quantita");
+    const valoreIniziale = giacenza.value;
+
+    function aggiornaDestinazioni(origineId) {
+        for (const option of destinazione.options) {
+            option.disabled = Boolean(origineId) && option.value === String(origineId);
+        }
+        if (destinazione.selectedOptions[0]?.disabled) destinazione.value = "";
+    }
+
+    function aggiornaLimite() {
+        const option = giacenza.selectedOptions[0];
+        quantita.max = option?.dataset.quantita || "";
+        aggiornaDestinazioni(option?.dataset.ubicazione);
+    }
+
+    async function caricaDisponibilita() {
+        giacenza.disabled = true;
+        giacenza.innerHTML = '<option value="">Caricamento...</option>';
+        aggiornaDestinazioni("");
+        if (!articolo.value) {
+            giacenza.innerHTML = '<option value="">Seleziona prima un articolo</option>';
+            return;
+        }
+        try {
+            const url = new URL(form.dataset.disponibilitaUrl, window.location.origin);
+            url.searchParams.set("articolo", articolo.value);
+            const response = await fetch(url, {headers: {"X-Requested-With": "XMLHttpRequest"}});
+            if (!response.ok) throw new Error();
+            const dati = await response.json();
+            giacenza.innerHTML = '<option value="">Seleziona lotto e posizione</option>';
+            for (const riga of dati.disponibilita) {
+                const option = document.createElement("option");
+                option.value = riga.id;
+                option.dataset.quantita = riga.quantita;
+                option.dataset.ubicazione = riga.ubicazione_id;
+                option.textContent = `Lotto ${riga.lotto} — ${riga.posizione} — disponibili ${riga.quantita} ${riga.unita_misura}`;
+                if (String(riga.id) === valoreIniziale) option.selected = true;
+                giacenza.appendChild(option);
+            }
+            if (!dati.disponibilita.length) {
+                giacenza.innerHTML = '<option value="">Nessun lotto con giacenza positiva</option>';
+            }
+            giacenza.disabled = false;
+            aggiornaLimite();
+        } catch {
+            giacenza.innerHTML = '<option value="">Errore nel caricamento dei lotti</option>';
+        }
+    }
+
+    articolo.addEventListener("change", caricaDisponibilita);
+    giacenza.addEventListener("change", aggiornaLimite);
+    caricaDisponibilita();
+})();
+</script>
 
 {% endblock %}

@@ -1,0 +1,100 @@
+{% extends "magazzino/base.html" %}
+
+{% block title %}Ricerca lotti - Gestionale Marmellate{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h2>Ricerca lotti e tracciabilità</h2>
+        <p>Cerca un lotto per codice, articolo o fornitore.</p>
+    </div>
+</div>
+
+<div class="form-card">
+    <form method="get" class="search-form">
+        <p>
+            <label for="id_q">Ricerca</label>
+            <input
+                type="search"
+                id="id_q"
+                name="q"
+                value="{{ query }}"
+                placeholder="Codice lotto, articolo o fornitore"
+                autofocus
+            >
+        </p>
+        <div class="form-actions">
+            <button type="submit" class="btn">Cerca</button>
+            {% if query %}
+                <a href="{% url 'ricerca_lotti' %}" class="btn btn-secondary">
+                    Azzera ricerca
+                </a>
+            {% endif %}
+        </div>
+    </form>
+</div>
+
+{% if query %}
+    <p>
+        {{ page_obj.paginator.count }} risultat{{ page_obj.paginator.count|pluralize:"o,i" }}
+        per “{{ query }}”.
+    </p>
+{% endif %}
+
+<div class="table-container">
+    <table>
+        <thead>
+            <tr>
+                <th>Lotto</th>
+                <th>Articolo</th>
+                <th>Tipo</th>
+                <th>Fornitore</th>
+                <th>Arrivo / produzione</th>
+                <th>Scadenza</th>
+                <th>Giacenza</th>
+                <th>Ultimo movimento</th>
+                <th>Tracciabilità</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for lotto in lotti %}
+                <tr>
+                    <td><strong>{{ lotto.codice_lotto }}</strong></td>
+                    <td>
+                        {{ lotto.articolo.codice }}<br>
+                        {{ lotto.articolo.descrizione }}
+                    </td>
+                    <td>{{ lotto.get_tipo_display }}</td>
+                    <td>{{ lotto.fornitore|default:"—" }}</td>
+                    <td>
+                        {% if lotto.data_arrivo %}
+                            {{ lotto.data_arrivo|date:"d/m/Y" }}
+                        {% elif lotto.data_produzione %}
+                            {{ lotto.data_produzione|date:"d/m/Y" }}
+                        {% else %}
+                            —
+                        {% endif %}
+                    </td>
+                    <td>{{ lotto.data_scadenza|date:"d/m/Y"|default:"—" }}</td>
+                    <td>
+                        {{ lotto.giacenza_totale|default_if_none:"0" }}
+                        {{ lotto.articolo.unita_misura }}
+                    </td>
+                    <td>{{ lotto.ultimo_movimento|date:"d/m/Y H:i"|default:"—" }}</td>
+                    <td>
+                        <a href="{% url 'dettaglio_lotto' lotto.pk %}" class="btn">
+                            Apri tracciabilità
+                        </a>
+                    </td>
+                </tr>
+            {% empty %}
+                <tr>
+                    <td colspan="9">Nessun lotto trovato.</td>
+                </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+{% include "magazzino/includes/pagination.html" %}
+{% endblock %}

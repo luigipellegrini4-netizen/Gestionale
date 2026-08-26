@@ -21,6 +21,11 @@ urlpatterns = [
         views.trasferimento,
         name="trasferimento",
     ),
+    path(
+        "trasferimento/disponibilita/",
+        views.disponibilita_trasferimento,
+        name="disponibilita_trasferimento",
+    ),
 
     path(
         "situazione/",
@@ -38,6 +43,11 @@ urlpatterns = [
         "movimenti/",
         views.elenco_movimenti,
         name="elenco_movimenti",
+    ),
+    path(
+        "lotti/ricerca/",
+        views.ricerca_lotti,
+        name="ricerca_lotti",
     ),
 
     path(
@@ -108,6 +118,11 @@ urlpatterns = [
         views.gestione_produzione,
         name="gestione_produzione",
     ),
+    path(
+        "produzione/<int:pk>/elimina/",
+        views.elimina_produzione,
+        name="elimina_produzione",
+    ),
 
     path(
         "produzione-semilavorati/nuova/",
@@ -128,6 +143,11 @@ urlpatterns = [
         "produzione-semilavorati/<int:pk>/",
         views.gestione_produzione_semilavorato,
         name="gestione_produzione_semilavorato",
+    ),
+    path(
+        "produzione-semilavorati/<int:pk>/elimina/",
+        views.elimina_produzione_semilavorato,
+        name="elimina_produzione_semilavorato",
     ),
 
     path(

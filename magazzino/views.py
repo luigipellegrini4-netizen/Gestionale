@@ -2,9 +2,10 @@ from decimal import Decimal
 
 from django.contrib import messages
 from django.contrib.auth.decorators import permission_required
-from django.db.models import Sum
+from django.db.models import OuterRef, Q, Subquery, Sum
 from django.core.paginator import Paginator
 from django.shortcuts import get_object_or_404, redirect, render
+from django.http import JsonResponse
 
 from .forms import (
     CaricoLottoForm,
@@ -37,6 +38,8 @@ from .services import (
     registra_prelievi_semilavorato,
     registra_scarto_prelievo_semilavorato,
     conferma_produzione_semilavorato,
+    elimina_produzione_bozza,
+    elimina_produzione_semilavorato_bozza,
 )
 
 from .models import (
@@ -101,11 +104,9 @@ def trasferimento(request):
         if form.is_valid():
             try:
                 movimento = registra_trasferimento(
-                    lotto=form.cleaned_data["lotto"],
+                    lotto=form.cleaned_data["giacenza"].lotto,
                     quantita=form.cleaned_data["quantita"],
-                    ubicazione_origine=form.cleaned_data[
-                        "ubicazione_origine"
-                    ],
+                    ubicazione_origine=form.cleaned_data["giacenza"].ubicazione,
                     ubicazione_destinazione=form.cleaned_data[
                         "ubicazione_destinazione"
                     ],
@@ -133,6 +134,38 @@ def trasferimento(request):
         request,
         "magazzino/trasferimento.html",
         {"form": form},
+    )
+
+
+@permission_required("magazzino.operare_magazzino", raise_exception=True)
+def disponibilita_trasferimento(request):
+    articolo_id = request.GET.get("articolo")
+    if not articolo_id or not articolo_id.isdigit():
+        return JsonResponse({"disponibilita": []})
+
+    giacenze = (
+        Giacenza.objects.select_related("lotto__articolo", "ubicazione")
+        .filter(
+            lotto__articolo_id=articolo_id,
+            quantita__gt=0,
+            ubicazione__attiva=True,
+        )
+        .order_by("lotto__codice_lotto", "ubicazione__nome")
+    )
+    return JsonResponse(
+        {
+            "disponibilita": [
+                {
+                    "id": giacenza.pk,
+                    "lotto": giacenza.lotto.codice_lotto,
+                    "posizione": str(giacenza.ubicazione),
+                    "ubicazione_id": giacenza.ubicazione_id,
+                    "quantita": str(giacenza.quantita),
+                    "unita_misura": giacenza.lotto.articolo.unita_misura,
+                }
+                for giacenza in giacenze
+            ]
+        }
     )
 
 
@@ -278,6 +311,43 @@ def elenco_movimenti(request):
         {
             "movimenti": movimenti,
             "page_obj": movimenti,
+        },
+    )
+
+
+def ricerca_lotti(request):
+    query = request.GET.get("q", "").strip()
+    ultimo_movimento = (
+        Movimento.objects.filter(lotto_id=OuterRef("pk"))
+        .order_by("-data_ora", "-pk")
+        .values("data_ora")[:1]
+    )
+    lotti_queryset = (
+        Lotto.objects.select_related("articolo", "fornitore")
+        .annotate(
+            giacenza_totale=Sum("giacenze__quantita"),
+            ultimo_movimento=Subquery(ultimo_movimento),
+        )
+        .order_by("-data_arrivo", "-data_produzione", "codice_lotto")
+    )
+
+    if query:
+        lotti_queryset = lotti_queryset.filter(
+            Q(codice_lotto__icontains=query)
+            | Q(articolo__codice__icontains=query)
+            | Q(articolo__descrizione__icontains=query)
+            | Q(fornitore__ragione_sociale__icontains=query)
+            | Q(fornitore__codice__icontains=query)
+        )
+
+    lotti = Paginator(lotti_queryset, 50).get_page(request.GET.get("page"))
+    return render(
+        request,
+        "magazzino/ricerca_lotti.html",
+        {
+            "lotti": lotti,
+            "page_obj": lotti,
+            "query": query,
         },
     )
 
@@ -963,6 +1033,7 @@ def elenco_produzioni(request, tipo="produzione"):
         titolo = "Produzioni semilavorati"
         nuova_produzione_url = "nuova_produzione_semilavorato"
         gestione_url = "gestione_produzione_semilavorato"
+        elimina_url = "elimina_produzione_semilavorato"
 
     else:
         produzioni_queryset = (
@@ -984,6 +1055,7 @@ def elenco_produzioni(request, tipo="produzione"):
         titolo = "Produzioni marmellate"
         nuova_produzione_url = "nuova_produzione"
         gestione_url = "gestione_produzione"
+        elimina_url = "elimina_produzione"
 
     produzioni = Paginator(produzioni_queryset, 50).get_page(
         request.GET.get("page")
@@ -998,6 +1070,7 @@ def elenco_produzioni(request, tipo="produzione"):
             "titolo": titolo,
             "nuova_produzione_url": nuova_produzione_url,
             "gestione_url": gestione_url,
+            "elimina_url": elimina_url,
             "page_obj": produzioni,
         },
     )
@@ -1714,6 +1787,59 @@ def gestione_produzione_semilavorato(request, pk):
             "conferma_form": conferma_form,
         },
     )
+
+@permission_required("magazzino.operare_magazzino", raise_exception=True)
+def elimina_produzione(request, pk):
+    produzione = get_object_or_404(
+        Produzione.objects.select_related("articolo", "lotto"),
+        pk=pk,
+    )
+    if produzione.stato != Produzione.Stato.BOZZA:
+        messages.error(request, "È possibile eliminare solo le produzioni in bozza.")
+        return redirect("gestione_produzione", pk=produzione.pk)
+
+    if request.method == "POST":
+        elimina_produzione_bozza(produzione, operatore=request.user)
+        messages.success(request, "Produzione in bozza eliminata correttamente.")
+        return redirect("elenco_produzioni")
+
+    return render(
+        request,
+        "magazzino/elimina_produzione.html",
+        {"produzione": produzione, "tipo": "produzione"},
+    )
+
+
+@permission_required("magazzino.operare_magazzino", raise_exception=True)
+def elimina_produzione_semilavorato(request, pk):
+    produzione = get_object_or_404(
+        ProduzioneSemilavorato.objects.select_related("articolo", "lotto"),
+        pk=pk,
+    )
+    if produzione.stato != ProduzioneSemilavorato.Stato.BOZZA:
+        messages.error(
+            request,
+            "È possibile eliminare solo le produzioni semilavorato in bozza.",
+        )
+        return redirect("gestione_produzione_semilavorato", pk=produzione.pk)
+
+    if request.method == "POST":
+        elimina_produzione_semilavorato_bozza(
+            produzione,
+            operatore=request.user,
+        )
+        messages.success(
+            request,
+            "Produzione semilavorato in bozza eliminata correttamente.",
+        )
+        return redirect("elenco_produzioni_semilavorato")
+
+    return render(
+        request,
+        "magazzino/elimina_produzione.html",
+        {"produzione": produzione, "tipo": "semilavorato"},
+    )
+
 
 def home(request):
     return render(

@@ -94,6 +94,12 @@
                                     Dettaglio
                                 {% endif %}
                             </a>
+                            {% if produzione.stato == "BOZZA" and perms.magazzino.operare_magazzino %}
+                                &nbsp;·&nbsp;
+                                <a href="{% url elimina_url produzione.pk %}">
+                                    Elimina
+                                </a>
+                            {% endif %}
                         </td>
 
                     </tr>
