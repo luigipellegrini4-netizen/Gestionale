@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 from django.contrib.auth import get_user_model
@@ -14,6 +14,7 @@ from .models import (
     Inscatolamento,
     Lotto,
     Movimento,
+    Produzione,
     Ricetta,
     Ubicazione,
 )
@@ -394,3 +395,63 @@ class ElencoRicetteSeparateTests(TestCase):
             list(response.context["ricette_semilavorati"]),
             [self.ricetta_semilavorato],
         )
+
+
+class DashboardTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = get_user_model().objects.create_user(
+            username="dashboard-test",
+            password="password-di-test",
+        )
+        cls.articolo = Articolo.objects.create(
+            codice="SCORTA-DASH",
+            descrizione="Articolo sotto scorta",
+            categoria=Articolo.Categoria.MATERIA_PRIMA,
+            unita_misura=Articolo.UnitaMisura.KG,
+            scorta_minima=Decimal("10"),
+        )
+        cls.prodotto = Articolo.objects.create(
+            codice="PROD-DASH",
+            descrizione="Prodotto dashboard",
+            categoria=Articolo.Categoria.PRODOTTO_NUDO,
+            unita_misura=Articolo.UnitaMisura.KG,
+        )
+        cls.ubicazione = Ubicazione.objects.create(
+            nome="Dashboard magazzino",
+            tipo_magazzino=Ubicazione.TipoMagazzino.MP,
+        )
+        cls.lotto = Lotto.objects.create(
+            articolo=cls.articolo,
+            codice_lotto="LOT-DASH",
+            tipo=Lotto.Tipo.ACQUISTO,
+            quantita_iniziale=Decimal("5"),
+            data_scadenza=date.today() + timedelta(days=10),
+        )
+        Giacenza.objects.create(
+            lotto=cls.lotto,
+            ubicazione=cls.ubicazione,
+            quantita=Decimal("5"),
+        )
+        Movimento.objects.create(
+            tipo=Movimento.Tipo.CARICO,
+            lotto=cls.lotto,
+            quantita=Decimal("5"),
+            ubicazione_destinazione=cls.ubicazione,
+        )
+        Produzione.objects.create(
+            articolo=cls.prodotto,
+            data_produzione=date.today(),
+        )
+
+    def test_home_mostra_indicatori_operativi(self):
+        self.client.force_login(self.user)
+        response = self.client.get(reverse("home"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["numero_sotto_scorta"], 1)
+        self.assertEqual(response.context["numero_lotti_scadenza"], 1)
+        self.assertEqual(response.context["numero_produzioni_bozza"], 1)
+        self.assertEqual(response.context["movimenti_oggi"], 1)
+        self.assertContains(response, "LOT-DASH")
+        self.assertContains(response, "SCORTA-DASH")

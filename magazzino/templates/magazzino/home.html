@@ -5,4 +5,62 @@ Home - MIRA
 {% endblock %}
 
 {% block content %}
+<div class="page-header">
+    <div>
+        <h2>Dashboard MIRA</h2>
+        <p>Situazione operativa aggiornata al {{ oggi|date:"d/m/Y" }}.</p>
+    </div>
+</div>
+
+<div class="dashboard-cards">
+    <a href="{% url 'elenco_articoli' %}" class="dashboard-card dashboard-card-link {% if numero_sotto_scorta %}dashboard-warning{% endif %}">
+        <h3>Articoli sotto scorta</h3>
+        <p>{{ numero_sotto_scorta }}</p>
+        <span>Scorta attuale inferiore o uguale alla minima</span>
+    </a>
+    <a href="{% url 'ricerca_lotti' %}" class="dashboard-card dashboard-card-link {% if numero_lotti_scadenza %}dashboard-warning{% endif %}">
+        <h3>Lotti in scadenza</h3>
+        <p>{{ numero_lotti_scadenza }}</p>
+        <span>Con giacenza, entro il {{ limite_scadenza|date:"d/m/Y" }}</span>
+    </a>
+    <a href="{% url 'elenco_produzioni' %}" class="dashboard-card dashboard-card-link">
+        <h3>Produzioni in bozza</h3>
+        <p>{{ numero_produzioni_bozza }}</p>
+        <span>Prodotti e semilavorati ancora aperti</span>
+    </a>
+    <a href="{% url 'elenco_movimenti' %}" class="dashboard-card dashboard-card-link">
+        <h3>Movimenti di oggi</h3>
+        <p>{{ movimenti_oggi }}</p>
+        <span>Operazioni di magazzino registrate oggi</span>
+    </a>
+</div>
+
+<div class="dashboard-details">
+    <section class="card">
+        <h3>Priorità scorte</h3>
+        {% for articolo in articoli_sotto_scorta %}
+            <p>
+                <a href="{% url 'dettaglio_articolo' articolo.pk %}"><strong>{{ articolo.codice }}</strong></a>
+                — {{ articolo.descrizione }}:
+                {{ articolo.giacenza_attuale }} {{ articolo.unita_misura }}
+                (minimo {{ articolo.scorta_minima }})
+            </p>
+        {% empty %}
+            <p>Nessun articolo sotto la scorta minima.</p>
+        {% endfor %}
+    </section>
+
+    <section class="card">
+        <h3>Scadenze più vicine</h3>
+        {% for lotto in lotti_in_scadenza %}
+            <p>
+                <a href="{% url 'dettaglio_lotto' lotto.pk %}"><strong>{{ lotto.codice_lotto }}</strong></a>
+                — {{ lotto.articolo.descrizione }}:
+                {{ lotto.data_scadenza|date:"d/m/Y" }}
+            </p>
+        {% empty %}
+            <p>Nessun lotto in scadenza nei prossimi 30 giorni.</p>
+        {% endfor %}
+    </section>
+</div>
 {% endblock %}

@@ -1,9 +1,10 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 
 from django.contrib import messages
 from django.contrib.auth.decorators import permission_required, user_passes_test
-from django.db.models import OuterRef, Q, Subquery, Sum
+from django.db.models import F, OuterRef, Q, Subquery, Sum
+from django.utils import timezone
 from django.core.paginator import Paginator
 from django.shortcuts import get_object_or_404, redirect, render
 from django.http import HttpResponse, JsonResponse
@@ -2078,7 +2079,51 @@ def elimina_produzione_semilavorato(request, pk):
 
 
 def home(request):
+    oggi = timezone.localdate()
+    limite_scadenza = oggi + timedelta(days=30)
+    articoli_sotto_scorta = (
+        Articolo.objects.annotate(
+            giacenza_attuale=Sum(
+                "lotti__giacenze__quantita",
+                default=Decimal("0"),
+            )
+        )
+        .filter(
+            attivo=True,
+            scorta_minima__gt=0,
+            giacenza_attuale__lte=F("scorta_minima"),
+        )
+        .order_by("codice")
+    )
+    lotti_in_scadenza = (
+        Lotto.objects.select_related("articolo")
+        .filter(
+            data_scadenza__gte=oggi,
+            data_scadenza__lte=limite_scadenza,
+            giacenze__quantita__gt=0,
+        )
+        .distinct()
+        .order_by("data_scadenza", "codice_lotto")
+    )
+    produzioni_bozza = Produzione.objects.filter(
+        stato=Produzione.Stato.BOZZA
+    ).count()
+    semilavorati_bozza = ProduzioneSemilavorato.objects.filter(
+        stato=ProduzioneSemilavorato.Stato.BOZZA
+    ).count()
+    movimenti_oggi = Movimento.objects.filter(data_ora__date=oggi).count()
+
     return render(
         request,
         "magazzino/home.html",
+        {
+            "numero_sotto_scorta": articoli_sotto_scorta.count(),
+            "numero_lotti_scadenza": lotti_in_scadenza.count(),
+            "numero_produzioni_bozza": produzioni_bozza + semilavorati_bozza,
+            "movimenti_oggi": movimenti_oggi,
+            "articoli_sotto_scorta": articoli_sotto_scorta[:5],
+            "lotti_in_scadenza": lotti_in_scadenza[:5],
+            "oggi": oggi,
+            "limite_scadenza": limite_scadenza,
+        },
     )
