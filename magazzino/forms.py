@@ -57,6 +57,18 @@ class CaricoLottoForm(forms.Form):
         label="Ubicazione",
     )
 
+    scaffale = forms.CharField(
+        max_length=30,
+        required=False,
+        label="Scaffale",
+    )
+
+    piano = forms.CharField(
+        max_length=30,
+        required=False,
+        label="Piano",
+    )
+
     data_arrivo = forms.DateField(
         label="Data arrivo",
         widget=forms.DateInput(
@@ -116,6 +128,18 @@ class TrasferimentoForm(forms.Form):
             "nome",
         ),
         label="Ubicazione destinazione",
+    )
+
+    scaffale_destinazione = forms.CharField(
+        max_length=30,
+        required=False,
+        label="Scaffale destinazione",
+    )
+
+    piano_destinazione = forms.CharField(
+        max_length=30,
+        required=False,
+        label="Piano destinazione",
     )
 
     quantita = forms.DecimalField(
@@ -213,6 +237,18 @@ class ConsumoForm(forms.Form):
         label="Ubicazione origine",
     )
 
+    scaffale_origine = forms.CharField(
+        max_length=30,
+        required=False,
+        label="Scaffale origine",
+    )
+
+    piano_origine = forms.CharField(
+        max_length=30,
+        required=False,
+        label="Piano origine",
+    )
+
     quantita = forms.DecimalField(
         max_digits=12,
         decimal_places=3,
@@ -284,7 +320,7 @@ class RicettaForm(forms.ModelForm):
                 attivo=True,
                 categoria__in=[
                     Articolo.Categoria.SEMILAVORATO,
-                    Articolo.Categoria.PRODOTTO_NUDO,
+                    Articolo.Categoria.PRODOTTO_FINITO,
                 ],
             ).order_by(
                 "codice",
@@ -373,7 +409,7 @@ class ProduzioneForm(forms.Form):
 
     articolo = ArticoloProduzioneChoiceField(
         queryset=Articolo.objects.filter(
-            categoria=Articolo.Categoria.PRODOTTO_NUDO,
+            categoria=Articolo.Categoria.PRODOTTO_FINITO,
             attivo=True,
         ).order_by(
             "descrizione",
@@ -455,6 +491,32 @@ class IngredienteProduzioneForm(forms.Form):
         )
 
 
+class AperturaTankForm(forms.Form):
+    numero_batch = forms.IntegerField(
+        min_value=1,
+        max_value=5,
+        initial=5,
+        label="Numero di batch",
+        help_text="Un tank può contenere da 1 a 5 batch Robocubo.",
+    )
+
+
+class ControlloTankForm(forms.Form):
+    gradi_brix = forms.DecimalField(
+        min_value=0,
+        max_digits=5,
+        decimal_places=2,
+        label="Gradi Brix",
+    )
+    ph = forms.DecimalField(
+        min_value=0,
+        max_value=14,
+        max_digits=4,
+        decimal_places=2,
+        label="pH",
+    )
+
+
 class ScartoProduzioneForm(forms.Form):
 
     quantita_scarto = forms.DecimalField(
@@ -496,6 +558,14 @@ class ScartoProduzioneForm(forms.Form):
 
 class ConfermaProduzioneForm(forms.Form):
 
+    pastorizzazione_completata = forms.BooleanField(
+        label="Pastorizzazione completata",
+    )
+
+    vuoto_controllato = forms.BooleanField(
+        label="Controllo del vuoto completato",
+    )
+
     quantita_prodotta = forms.DecimalField(
         max_digits=12,
         decimal_places=3,
@@ -518,7 +588,8 @@ class ConfezionamentoForm(forms.Form):
 
     lotto_origine = forms.ModelChoiceField(
         queryset=Lotto.objects.filter(
-            articolo__categoria=Articolo.Categoria.PRODOTTO_NUDO,
+            articolo__categoria=Articolo.Categoria.PRODOTTO_FINITO,
+            fase=Lotto.Fase.INVASETTATO,
             articolo__attivo=True,
             giacenze__quantita__gt=0,
         ).select_related(
@@ -527,7 +598,7 @@ class ConfezionamentoForm(forms.Form):
             "articolo__codice",
             "codice_lotto",
         ),
-        label="Lotto prodotto nudo",
+        label="Lotto invasettato da etichettare",
     )
 
     quantita_confezionata = forms.DecimalField(
@@ -559,7 +630,7 @@ class ConfezionamentoForm(forms.Form):
         ).order_by(
             "nome",
         ),
-        label="Ubicazione prodotto nudo",
+        label="Ubicazione prodotto invasettato",
     )
 
     ubicazione_destinazione = forms.ModelChoiceField(
@@ -598,6 +669,7 @@ class InscatolamentoForm(forms.Form):
     lotto_prodotto = forms.ModelChoiceField(
         queryset=Lotto.objects.filter(
             articolo__categoria=Articolo.Categoria.PRODOTTO_FINITO,
+            fase=Lotto.Fase.ETICHETTATO,
             articolo__attivo=True,
             giacenze__quantita__gt=0,
             giacenze__ubicazione__tipo_magazzino=Ubicazione.TipoMagazzino.PRODOTTI_FINITI,
@@ -853,11 +925,11 @@ class ArticoloForm(forms.ModelForm):
             "nome_produzione",
             "categoria",
             "unita_misura",
+            "quantita_per_confezione",
             "scorta_minima",
             "criterio_rotazione",
             "tipo_packaging",
             "pezzi_per_imballo",
-            "prodotto_finito_collegato",
             "attivo",
             "note",
         ]
@@ -868,14 +940,33 @@ class ArticoloForm(forms.ModelForm):
             "nome_produzione": "Nome prodotto in ricette e produzione",
             "categoria": "Categoria",
             "unita_misura": "Unità di misura",
+            "quantita_per_confezione": "Quantità per confezione",
             "scorta_minima": "Scorta minima",
             "criterio_rotazione": "Criterio rotazione",
             "tipo_packaging": "Tipo packaging",
-            "pezzi_per_imballo": "Pezzi per imballo",
-            "prodotto_finito_collegato": "Prodotto finito collegato",
+            "pezzi_per_imballo": "Confezioni per imballo",
             "attivo": "Articolo attivo",
             "note": "Note",
         }
+
+        help_texts = {
+            "quantita_per_confezione": (
+                "Quantità contenuta in ogni confezione, espressa nell'unità "
+                "di misura dell'articolo. Esempio: 1 kg per un sacchetto di zucchero."
+            ),
+            "pezzi_per_imballo": (
+                "Numero di confezioni contenute in un imballo. "
+                "Esempio: 25 sacchetti da 1 kg di zucchero per imballo."
+            ),
+        }
+
+    def clean_quantita_per_confezione(self):
+        quantita = self.cleaned_data.get("quantita_per_confezione")
+        if quantita is not None and quantita <= 0:
+            raise forms.ValidationError(
+                "La quantità per confezione deve essere maggiore di zero."
+            )
+        return quantita
 
 
 class FornitoreForm(forms.ModelForm):

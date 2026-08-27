@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -40,6 +42,15 @@ class ImportazioneCSVTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("attachment", response["Content-Disposition"])
         self.assertIn("codice;ragione_sociale", response.content.decode("utf-8-sig"))
+
+    def test_template_articoli_include_quantita_per_confezione(self):
+        response = self.client.get(reverse("template_csv", args=["articoli"]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(
+            "unita_misura;quantita_per_confezione;scorta_minima",
+            response.content.decode("utf-8-sig"),
+        )
 
     def test_import_fornitori_crea_e_aggiorna(self):
         intestazione = (
@@ -94,14 +105,17 @@ class ImportazioneCSVTests(TestCase):
         )
         self.carica(
             "articoli",
-            "codice;descrizione;nome_produzione;categoria;unita_misura;scorta_minima;"
+            "codice;descrizione;nome_produzione;categoria;unita_misura;"
+            "quantita_per_confezione;scorta_minima;"
             "criterio_rotazione;tipo_packaging;pezzi_per_imballo;"
-            "prodotto_finito_collegato;attivo;note\n"
-            "MP-CSV;Materia prima CSV;Materia CSV;MATERIA_PRIMA;KG;2,5;FEFO;;;;vero;\n",
+            "attivo;note\n"
+            "MP-CSV;Materia prima CSV;Materia CSV;MATERIA_PRIMA;KG;1,25;2,5;"
+            "FEFO;;;vero;\n",
         )
 
         self.assertTrue(Ubicazione.objects.filter(nome="Cella A").exists())
         articolo = Articolo.objects.get(codice="MP-CSV")
         self.assertEqual(articolo.descrizione, "Materia prima CSV")
         self.assertEqual(articolo.nome_produzione, "Materia CSV")
+        self.assertEqual(articolo.quantita_per_confezione, Decimal("1.250"))
         self.assertEqual(str(articolo.scorta_minima), "2.500")

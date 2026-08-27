@@ -91,6 +91,38 @@ Produzione {{ produzione.articolo.codice }} - MIRA
 
 {% if ricetta %}
 
+{% if produzione.stato == "BOZZA" %}
+<div class="card">
+    <h3>Tank di produzione</h3>
+    {% if tank %}
+        <table>
+            <thead><tr><th>Tank</th><th>Batch</th><th>°Brix</th><th>pH</th></tr></thead>
+            <tbody>
+            {% for elemento in tank %}
+                <tr>
+                    <td>Tank {{ elemento.numero }}</td>
+                    <td>{{ elemento.numero_batch }}</td>
+                    <td>{{ elemento.gradi_brix|default:"Da registrare" }}</td>
+                    <td>{{ elemento.ph|default:"Da registrare" }}</td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    {% endif %}
+
+    {% if not tank_corrente %}
+        <form method="post">
+            {% csrf_token %}
+            <input type="hidden" name="azione" value="apri_tank">
+            {{ apertura_tank_form.as_p }}
+            <button type="submit" class="btn">Apri nuovo tank</button>
+        </form>
+    {% else %}
+        <p><strong>Tank {{ tank_corrente.numero }}</strong>: {{ tank_corrente.numero_batch }} batch Robocubo.</p>
+    {% endif %}
+</div>
+{% endif %}
+
 <div class="card">
 
     <h3>
@@ -115,6 +147,7 @@ Produzione {{ produzione.articolo.codice }} - MIRA
                     <th>Quantità teorica</th>
                     <th>Unità</th>
                     <th>Entra nel prodotto</th>
+                    {% if tank_corrente and produzione.stato == "BOZZA" %}<th>Prelievo effettivo</th>{% endif %}
                 </tr>
 
             </thead>
@@ -126,21 +159,33 @@ Produzione {{ produzione.articolo.codice }} - MIRA
                     <tr>
 
                         <td>
-                            {{ riga.articolo.codice }}
+                            {{ riga.riga.articolo.codice }}
                             -
-                            {{ riga.articolo.descrizione }}
+                            {{ riga.riga.articolo.descrizione }}
+                        </td>
+
+                        {% if tank_corrente and produzione.stato == "BOZZA" %}
+                        <td>
+                            <form method="post">
+                                {% csrf_token %}
+                                <input type="hidden" name="azione" value="aggiungi_ingrediente">
+                                <input type="hidden" name="articolo" value="{{ riga.riga.articolo.pk }}">
+                                <input type="number" name="quantita_richiesta" min="0.001" step="0.001" value="{{ riga.quantita_input }}" required>
+                                <button type="submit" class="btn">Registra prelievo</button>
+                            </form>
+                        </td>
+                        {% endif %}
+
+                        <td>
+                            {{ riga.quantita_prevista }}
                         </td>
 
                         <td>
-                            {{ riga.quantita }}
+                            {{ riga.riga.articolo.unita_misura }}
                         </td>
 
                         <td>
-                            {{ riga.articolo.unita_misura }}
-                        </td>
-
-                        <td>
-                            {% if riga.ingrediente_prodotto %}
+                            {% if riga.riga.ingrediente_prodotto %}
                                 Sì
                             {% else %}
                                 No
@@ -159,6 +204,19 @@ Produzione {{ produzione.articolo.codice }} - MIRA
 
 </div>
 
+{% if tank_corrente and produzione.stato == "BOZZA" %}
+<div class="card">
+    <h3>Controlli Tank {{ tank_corrente.numero }}</h3>
+    <p>Registra i controlli dopo aver completato prelievi e scarti.</p>
+    <form method="post">
+        {% csrf_token %}
+        <input type="hidden" name="azione" value="controlla_tank">
+        {{ controllo_tank_form.as_p }}
+        <button type="submit" class="btn">Registra °Brix e pH</button>
+    </form>
+</div>
+{% endif %}
+
 {% endif %}
 
 
@@ -174,6 +232,7 @@ Produzione {{ produzione.articolo.codice }} - MIRA
 
                 <tr>
                     <th>Articolo</th>
+                    <th>Tank</th>
                     <th>Lotto</th>
                     <th>Ubicazione origine</th>
                     <th>Prelevato</th>
@@ -200,11 +259,21 @@ Produzione {{ produzione.articolo.codice }} - MIRA
                         </td>
 
                         <td>
+                            {% if prelievo.tank %}Tank {{ prelievo.tank.numero }}{% else %}—{% endif %}
+                        </td>
+
+                        <td>
                             {{ prelievo.lotto.codice_lotto }}
                         </td>
 
                         <td>
                             {{ prelievo.ubicazione_origine.nome }}
+                            {% if prelievo.scaffale_origine or prelievo.piano_origine %}
+                                <br><small>
+                                    {% if prelievo.scaffale_origine %}Scaffale {{ prelievo.scaffale_origine }}{% endif %}
+                                    {% if prelievo.piano_origine %} · Piano {{ prelievo.piano_origine }}{% endif %}
+                                </small>
+                            {% endif %}
                         </td>
 
                         <td>
@@ -300,7 +369,7 @@ Produzione {{ produzione.articolo.codice }} - MIRA
 
 <div class="card">
 
-    <h3>Aggiungi prelievo</h3>
+    <h3>Aggiungi materiale MOCA o prelievo supplementare</h3>
 
     <p>
         Seleziona un ingrediente o materiale previsto dalla ricetta.
@@ -327,6 +396,19 @@ Produzione {{ produzione.articolo.codice }} - MIRA
             </div>
 
         {% endif %}
+
+
+        <div class="form-group">
+            {{ conferma_form.pastorizzazione_completata }}
+            {{ conferma_form.pastorizzazione_completata.label_tag }}
+            {{ conferma_form.pastorizzazione_completata.errors }}
+        </div>
+
+        <div class="form-group">
+            {{ conferma_form.vuoto_controllato }}
+            {{ conferma_form.vuoto_controllato.label_tag }}
+            {{ conferma_form.vuoto_controllato.errors }}
+        </div>
 
 
         <div class="form-group">

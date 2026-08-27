@@ -23,15 +23,18 @@ from .models import (
 )
 from .services import (
     avvia_produzione,
+    apri_tank_produzione,
     conferma_produzione,
     elimina_produzione_bozza,
     elimina_produzione_semilavorato_bozza,
     registra_carico,
+    registra_carico_lotto,
     registra_confezionamento,
     registra_consumo,
     registra_inscatolamento,
     registra_prelievi_produzione,
     registra_scarto_prelievo_produzione,
+    registra_controlli_tank,
     registra_trasferimento,
 )
 
@@ -84,6 +87,24 @@ class OperazioniMagazzinoTests(TestCase):
         self.assertEqual(movimento.tipo, Movimento.Tipo.CARICO)
         self.assertEqual(movimento.quantita, Decimal("2.5"))
         self.assertEqual(movimento.eseguito_da, self.operatore)
+
+    def test_carico_lotto_crea_posizione_scaffale_e_piano(self):
+        lotto, movimento = registra_carico_lotto(
+            articolo=self.articolo,
+            codice_lotto="LOT-SCAFFALE",
+            fornitore=None,
+            quantita=Decimal("3"),
+            ubicazione=self.origine,
+            scaffale="S1",
+            piano="P2",
+        )
+
+        giacenza = Giacenza.objects.get(lotto=lotto)
+        self.assertEqual(giacenza.ubicazione, self.origine)
+        self.assertEqual(giacenza.scaffale, "S1")
+        self.assertEqual(giacenza.piano, "P2")
+        self.assertEqual(movimento.scaffale_destinazione, "S1")
+        self.assertEqual(movimento.piano_destinazione, "P2")
 
     def test_trasferimento_aggiorna_entrambe_le_ubicazioni(self):
         movimento = registra_trasferimento(
@@ -200,7 +221,7 @@ class EliminazioneProduzioniBozzaTests(TestCase):
         cls.prodotto = Articolo.objects.create(
             codice="NUDO-ANN",
             descrizione="Prodotto nudo annullamento",
-            categoria=Articolo.Categoria.PRODOTTO_NUDO,
+            categoria=Articolo.Categoria.PRODOTTO_FINITO,
             unita_misura=Articolo.UnitaMisura.KG,
         )
         cls.semilavorato = Articolo.objects.create(
@@ -306,7 +327,7 @@ class ConfermaProduzioneTests(TestCase):
         cls.prodotto = Articolo.objects.create(
             codice="NUDO-TEST",
             descrizione="Prodotto nudo test",
-            categoria=Articolo.Categoria.PRODOTTO_NUDO,
+            categoria=Articolo.Categoria.PRODOTTO_FINITO,
             unita_misura=Articolo.UnitaMisura.KG,
         )
         cls.ubicazione_ingrediente = Ubicazione.objects.create(
@@ -340,21 +361,26 @@ class ConfermaProduzioneTests(TestCase):
 
     def test_produzione_non_puo_essere_confermata_due_volte(self):
         produzione = avvia_produzione(self.prodotto)
+        tank = apri_tank_produzione(produzione, numero_batch=1)
         prelievi = registra_prelievi_produzione(
             produzione=produzione,
             articolo=self.ingrediente,
             quantita_richiesta=Decimal("5"),
+            tank=tank,
         )
         for prelievo in prelievi:
             registra_scarto_prelievo_produzione(
                 prelievo=prelievo,
                 quantita_scarto=Decimal("0"),
             )
+        registra_controlli_tank(tank, gradi_brix="65", ph="3.20")
 
         produzione_confermata = conferma_produzione(
             produzione=produzione,
             quantita_prodotta=Decimal("4"),
             ubicazione_destinazione=self.ubicazione_prodotto,
+            pastorizzazione_completata=True,
+            vuoto_controllato=True,
         )
 
         with self.assertRaisesMessage(ValueError, "non è in bozza"):
@@ -362,11 +388,17 @@ class ConfermaProduzioneTests(TestCase):
                 produzione=produzione,
                 quantita_prodotta=Decimal("4"),
                 ubicazione_destinazione=self.ubicazione_prodotto,
+                pastorizzazione_completata=True,
+                vuoto_controllato=True,
             )
 
         self.assertEqual(
             Lotto.objects.filter(articolo=self.prodotto).count(),
             1,
+        )
+        self.assertEqual(
+            produzione_confermata.lotto.fase,
+            Lotto.Fase.INVASETTATO,
         )
 
         self.client.force_login(self.user)
@@ -382,6 +414,15 @@ class ConfermaProduzioneTests(TestCase):
             Decimal("0"),
         )
 
+    def test_non_apre_un_secondo_tank_prima_dei_controlli(self):
+        produzione = avvia_produzione(self.prodotto)
+        tank = apri_tank_produzione(produzione, numero_batch=5)
+
+        self.assertEqual(tank.numero, 1)
+        self.assertEqual(tank.numero_batch, 5)
+        with self.assertRaisesMessage(ValueError, "tank aperto"):
+            apri_tank_produzione(produzione, numero_batch=1)
+
 
 class ConfezionamentoInscatolamentoTests(TestCase):
     @classmethod
@@ -396,13 +437,7 @@ class ConfezionamentoInscatolamentoTests(TestCase):
             categoria=Articolo.Categoria.PRODOTTO_FINITO,
             unita_misura=Articolo.UnitaMisura.PZ,
         )
-        cls.prodotto_nudo = Articolo.objects.create(
-            codice="NUDO-PACK",
-            descrizione="Prodotto nudo packaging",
-            categoria=Articolo.Categoria.PRODOTTO_NUDO,
-            unita_misura=Articolo.UnitaMisura.PZ,
-            prodotto_finito_collegato=cls.prodotto_finito,
-        )
+        cls.prodotto_nudo = cls.prodotto_finito
         cls.etichetta = Articolo.objects.create(
             codice="ETI-PACK",
             descrizione="Etichetta packaging",
@@ -430,7 +465,8 @@ class ConfezionamentoInscatolamentoTests(TestCase):
             articolo=cls.prodotto_nudo,
             codice_lotto="PACK-LOT",
             tipo=Lotto.Tipo.PRODUZIONE,
-            quantita_iniziale=Decimal("10"),
+            fase=Lotto.Fase.INVASETTATO,
+            quantita_iniziale=Decimal("6"),
         )
         cls.lotto_etichetta = Lotto.objects.create(
             articolo=cls.etichetta,
@@ -449,7 +485,7 @@ class ConfezionamentoInscatolamentoTests(TestCase):
         Giacenza.objects.create(
             lotto=self.lotto_nudo,
             ubicazione=self.ubicazione_packaging,
-            quantita=Decimal("10"),
+            quantita=Decimal("6"),
         )
         Giacenza.objects.create(
             lotto=self.lotto_etichetta,
@@ -478,15 +514,21 @@ class ConfezionamentoInscatolamentoTests(TestCase):
 
         self.assertIsInstance(confezionamento, Confezionamento)
         self.assertEqual(
-            Giacenza.objects.get(lotto=self.lotto_nudo).quantita,
-            Decimal("4"),
+            Giacenza.objects.get(
+                lotto=self.lotto_nudo,
+                ubicazione=self.ubicazione_packaging,
+            ).quantita,
+            Decimal("0"),
         )
         self.assertEqual(
             Giacenza.objects.get(lotto=self.lotto_etichetta).quantita,
             Decimal("14"),
         )
         self.assertEqual(
-            Giacenza.objects.get(lotto=confezionamento.lotto_finito).quantita,
+            Giacenza.objects.get(
+                lotto=confezionamento.lotto_finito,
+                ubicazione=self.ubicazione_finiti,
+            ).quantita,
             Decimal("6"),
         )
         self.assertEqual(Movimento.objects.count(), 3)
@@ -512,7 +554,7 @@ class ConfezionamentoInscatolamentoTests(TestCase):
             Decimal("9"),
         )
 
-        with self.assertRaisesMessage(ValueError, "Quantità sfusa insufficiente"):
+        with self.assertRaisesMessage(ValueError, "deve essere etichettato"):
             registra_inscatolamento(
                 lotto_prodotto=confezionamento.lotto_finito,
                 lotto_imballo=self.lotto_scatola,

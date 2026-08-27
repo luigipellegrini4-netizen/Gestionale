@@ -133,6 +133,12 @@ Produzione semilavorato
 
                         <td>
                             {{ prelievo.ubicazione_origine }}
+                            {% if prelievo.scaffale_origine or prelievo.piano_origine %}
+                                <br><small>
+                                    {% if prelievo.scaffale_origine %}Scaffale {{ prelievo.scaffale_origine }}{% endif %}
+                                    {% if prelievo.piano_origine %} · Piano {{ prelievo.piano_origine }}{% endif %}
+                                </small>
+                            {% endif %}
                         </td>
 
                         <td>

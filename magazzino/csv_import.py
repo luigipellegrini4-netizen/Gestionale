@@ -28,8 +28,9 @@ CONFIGURAZIONI_CSV = {
     "articoli": {
         "headers": [
             "codice", "descrizione", "nome_produzione", "categoria", "unita_misura",
-            "scorta_minima", "criterio_rotazione", "tipo_packaging",
-            "pezzi_per_imballo", "prodotto_finito_collegato", "attivo",
+            "quantita_per_confezione", "scorta_minima", "criterio_rotazione",
+            "tipo_packaging",
+            "pezzi_per_imballo", "attivo",
             "note",
         ],
         "model": Articolo,
@@ -98,20 +99,10 @@ def importa_csv(tipo, contenuto):
         campo_attivo = "attiva" if tipo == "ubicazioni" else "attivo"
         dati[campo_attivo] = _normalizza_booleano(dati[campo_attivo])
         if tipo == "articoli":
+            dati["quantita_per_confezione"] = dati[
+                "quantita_per_confezione"
+            ].replace(",", ".")
             dati["scorta_minima"] = dati["scorta_minima"].replace(",", ".")
-            codice_collegato = dati.pop("prodotto_finito_collegato")
-            if codice_collegato:
-                collegato = Articolo.objects.filter(
-                    codice__iexact=codice_collegato,
-                    categoria=Articolo.Categoria.PRODOTTO_FINITO,
-                ).first()
-                if collegato is None:
-                    errori.append(
-                        f"Riga {numero_riga}: prodotto finito collegato "
-                        f"'{codice_collegato}' non trovato."
-                    )
-                    continue
-                dati["prodotto_finito_collegato"] = str(collegato.pk)
 
         esistente = configurazione["model"].objects.filter(
             **{f"{configurazione['key']}__iexact": chiave}

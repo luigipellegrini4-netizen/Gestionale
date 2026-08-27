@@ -2,6 +2,7 @@ from decimal import Decimal
 from datetime import date
 
 from django.db import transaction
+from django.db.models import Q
 
 from .models import (
     Lotto,
@@ -9,6 +10,7 @@ from .models import (
     Movimento,
     Ubicazione,
     Produzione,
+    TankProduzione,
     PrelievoProduzione,
     Confezionamento,
     ConsumoConfezionamento,
@@ -21,6 +23,8 @@ def registra_carico(
     lotto,
     quantita,
     ubicazione,
+    scaffale="",
+    piano="",
     causale="Carico",
     note="",
     operatore=None,
@@ -37,6 +41,8 @@ def registra_carico(
     giacenza, _ = Giacenza.objects.select_for_update().get_or_create(
         lotto=lotto,
         ubicazione=ubicazione,
+        scaffale=(scaffale or "").strip(),
+        piano=(piano or "").strip(),
         defaults={"quantita": Decimal("0")},
     )
     giacenza.quantita += quantita
@@ -46,6 +52,8 @@ def registra_carico(
         lotto=lotto,
         quantita=quantita,
         ubicazione_destinazione=ubicazione,
+        scaffale_destinazione=(scaffale or "").strip(),
+        piano_destinazione=(piano or "").strip(),
         causale=causale,
         note=note,
         eseguito_da=operatore,
@@ -60,6 +68,8 @@ def registra_carico_lotto(
     fornitore,
     quantita,
     ubicazione,
+    scaffale="",
+    piano="",
     data_arrivo=None,
     data_scadenza=None,
     causale="Carico",
@@ -97,6 +107,8 @@ def registra_carico_lotto(
         lotto=lotto,
         quantita=quantita,
         ubicazione=ubicazione,
+        scaffale=scaffale,
+        piano=piano,
         causale=causale,
         note=note,
         operatore=operatore,
@@ -110,13 +122,27 @@ def registra_trasferimento(
     quantita,
     ubicazione_origine,
     ubicazione_destinazione,
+    scaffale_origine="",
+    piano_origine="",
+    scaffale_destinazione="",
+    piano_destinazione="",
     note="",
     operatore=None,
 ):
     quantita = Decimal(str(quantita))
     if quantita <= 0:
         raise ValueError("La quantità deve essere maggiore di zero.")
-    if ubicazione_origine == ubicazione_destinazione:
+    posizione_origine = (
+        ubicazione_origine.pk,
+        (scaffale_origine or "").strip(),
+        (piano_origine or "").strip(),
+    )
+    posizione_destinazione = (
+        ubicazione_destinazione.pk,
+        (scaffale_destinazione or "").strip(),
+        (piano_destinazione or "").strip(),
+    )
+    if posizione_origine == posizione_destinazione:
         raise ValueError(
             "L'ubicazione di origine e destinazione devono essere diverse."
         )
@@ -130,6 +156,8 @@ def registra_trasferimento(
         .filter(
             lotto=lotto,
             ubicazione=ubicazione_origine,
+            scaffale=posizione_origine[1],
+            piano=posizione_origine[2],
         )
         .first()
     )
@@ -143,6 +171,8 @@ def registra_trasferimento(
         .get_or_create(
             lotto=lotto,
             ubicazione=ubicazione_destinazione,
+            scaffale=posizione_destinazione[1],
+            piano=posizione_destinazione[2],
             defaults={"quantita": Decimal("0")},
         )
     )
@@ -156,6 +186,10 @@ def registra_trasferimento(
         quantita=quantita,
         ubicazione_origine=ubicazione_origine,
         ubicazione_destinazione=ubicazione_destinazione,
+        scaffale_origine=posizione_origine[1],
+        piano_origine=posizione_origine[2],
+        scaffale_destinazione=posizione_destinazione[1],
+        piano_destinazione=posizione_destinazione[2],
         causale="Trasferimento",
         note=note,
         eseguito_da=operatore,
@@ -168,6 +202,8 @@ def registra_consumo(
     lotto,
     quantita,
     ubicazione_origine,
+    scaffale_origine="",
+    piano_origine="",
     causale="Consumo",
     note="",
     operatore=None,
@@ -183,6 +219,8 @@ def registra_consumo(
         .filter(
             lotto=lotto,
             ubicazione=ubicazione_origine,
+            scaffale=(scaffale_origine or "").strip(),
+            piano=(piano_origine or "").strip(),
         )
         .first()
     )
@@ -197,6 +235,8 @@ def registra_consumo(
         lotto=lotto,
         quantita=quantita,
         ubicazione_origine=ubicazione_origine,
+        scaffale_origine=(scaffale_origine or "").strip(),
+        piano_origine=(piano_origine or "").strip(),
         ubicazione_destinazione=None,
         causale=causale,
         note=note,
@@ -210,18 +250,8 @@ def genera_codice_lotto_produzione(articolo, data_produzione):
     codice = base
     progressivo = 0
 
-    articoli_da_controllare = [articolo]
-
-    if (
-        articolo.categoria == articolo.Categoria.PRODOTTO_NUDO
-        and articolo.prodotto_finito_collegato is not None
-    ):
-        articoli_da_controllare.append(
-            articolo.prodotto_finito_collegato
-        )
-
     while Lotto.objects.filter(
-        articolo__in=articoli_da_controllare,
+        articolo=articolo,
         codice_lotto=codice,
     ).exists():
         progressivo += 1
@@ -251,9 +281,9 @@ def avvia_produzione(
     if not articolo.attivo:
         raise ValueError("L'articolo non è attivo.")
 
-    if articolo.categoria != articolo.Categoria.PRODOTTO_NUDO:
+    if articolo.categoria != articolo.Categoria.PRODOTTO_FINITO:
         raise ValueError(
-            "La produzione deve riferirsi a un prodotto nudo."
+            "La produzione deve riferirsi a un prodotto finito."
         )
 
     if data_produzione is None:
@@ -302,12 +332,50 @@ def _articolo_ammesso_in_produzione(produzione, articolo):
 
 
 @transaction.atomic
+def apri_tank_produzione(produzione, numero_batch):
+    produzione = Produzione.objects.select_for_update().get(pk=produzione.pk)
+    if produzione.stato != Produzione.Stato.BOZZA:
+        raise ValueError("La produzione non è in bozza.")
+    if produzione.tank.filter(gradi_brix__isnull=True).exists():
+        raise ValueError("Registra Brix e pH del tank aperto prima di continuarne un altro.")
+    numero_batch = int(numero_batch)
+    if not 1 <= numero_batch <= 5:
+        raise ValueError("Un tank deve contenere da 1 a 5 batch.")
+    ultimo = produzione.tank.order_by("-numero").first()
+    return TankProduzione.objects.create(
+        produzione=produzione,
+        numero=(ultimo.numero + 1) if ultimo else 1,
+        numero_batch=numero_batch,
+    )
+
+
+@transaction.atomic
+def registra_controlli_tank(tank, gradi_brix, ph):
+    tank = TankProduzione.objects.select_for_update().get(pk=tank.pk)
+    if tank.controllato:
+        raise ValueError("I controlli di questo tank sono già registrati.")
+    if not tank.prelievi.exists():
+        raise ValueError("Registra i prelievi del tank prima dei controlli.")
+    if tank.prelievi.filter(quantita_scarto__isnull=True).exists():
+        raise ValueError("Registra tutti gli scarti del tank prima dei controlli.")
+    gradi_brix = Decimal(str(gradi_brix))
+    ph = Decimal(str(ph))
+    if gradi_brix < 0 or ph < 0 or ph > 14:
+        raise ValueError("Valori Brix o pH non validi.")
+    tank.gradi_brix = gradi_brix
+    tank.ph = ph
+    tank.save(update_fields=["gradi_brix", "ph"])
+    return tank
+
+
+@transaction.atomic
 def registra_prelievi_produzione(
     produzione,
     articolo,
     quantita_richiesta,
     note="",
     operatore=None,
+    tank=None,
 ):
     if not isinstance(produzione, Produzione):
         raise ValueError("La produzione non è valida.")
@@ -323,6 +391,9 @@ def registra_prelievi_produzione(
             "È possibile registrare prelievi solo "
             "su una produzione in bozza."
         )
+
+    if tank is not None and tank.produzione_id != produzione.pk:
+        raise ValueError("Il tank non appartiene alla produzione.")
 
     if not articolo.attivo:
         raise ValueError("L'articolo non è attivo.")
@@ -364,10 +435,7 @@ def registra_prelievi_produzione(
         giacenza = (
             Giacenza.objects
             .select_for_update()
-            .get(
-                lotto=riga["lotto"],
-                ubicazione=riga["ubicazione"],
-            )
+            .get(pk=riga["giacenza_id"])
         )
 
         quantita_prelevata = riga["quantita_proposta"]
@@ -387,6 +455,8 @@ def registra_prelievi_produzione(
             lotto=giacenza.lotto,
             quantita=quantita_prelevata,
             ubicazione_origine=giacenza.ubicazione,
+            scaffale_origine=giacenza.scaffale,
+            piano_origine=giacenza.piano,
             ubicazione_destinazione=None,
             causale="Prelievo produzione marmellata",
             note=note,
@@ -395,8 +465,11 @@ def registra_prelievi_produzione(
 
         prelievo = PrelievoProduzione.objects.create(
             produzione=produzione,
+            tank=tank,
             lotto=giacenza.lotto,
             ubicazione_origine=giacenza.ubicazione,
+            scaffale_origine=giacenza.scaffale,
+            piano_origine=giacenza.piano,
             quantita_prelevata=quantita_prelevata,
             quantita_scarto=None,
             note=note,
@@ -425,6 +498,8 @@ def elimina_produzione_bozza(produzione, operatore=None):
         giacenza, _ = Giacenza.objects.select_for_update().get_or_create(
             lotto=prelievo.lotto,
             ubicazione=prelievo.ubicazione_origine,
+            scaffale=prelievo.scaffale_origine,
+            piano=prelievo.piano_origine,
             defaults={"quantita": Decimal("0")},
         )
         giacenza.quantita += prelievo.quantita_prelevata
@@ -508,6 +583,8 @@ def conferma_produzione(
     ubicazione_destinazione=None,
     note="",
     operatore=None,
+    pastorizzazione_completata=False,
+    vuoto_controllato=False,
 ):
     if not isinstance(produzione, Produzione):
         raise ValueError("La produzione non è valida.")
@@ -525,6 +602,19 @@ def conferma_produzione(
         raise ValueError(
             "La produzione ha già un lotto associato."
         )
+
+    if not produzione.tank.exists():
+        raise ValueError("Non è stato registrato alcun tank.")
+
+    if produzione.tank.filter(
+        Q(gradi_brix__isnull=True) | Q(ph__isnull=True)
+    ).exists():
+        raise ValueError("Completa i controlli Brix e pH di tutti i tank.")
+
+    if not pastorizzazione_completata:
+        raise ValueError("Conferma il completamento della pastorizzazione.")
+    if not vuoto_controllato:
+        raise ValueError("Conferma il controllo del vuoto.")
 
     quantita_prodotta = Decimal(str(quantita_prodotta))
 
@@ -630,6 +720,7 @@ def conferma_produzione(
         articolo=produzione.articolo,
         codice_lotto=codice_lotto,
         tipo=Lotto.Tipo.PRODUZIONE,
+        fase=Lotto.Fase.INVASETTATO,
         data_produzione=produzione.data_produzione,
         quantita_iniziale=quantita_prodotta,
         note=note,
@@ -647,7 +738,7 @@ def conferma_produzione(
         quantita=quantita_prodotta,
         ubicazione_origine=None,
         ubicazione_destinazione=ubicazione_destinazione,
-        causale="Produzione marmellata - prodotto nudo",
+        causale="Produzione marmellata - prodotto invasettato",
         note=note,
         eseguito_da=operatore,
     )
@@ -656,6 +747,8 @@ def conferma_produzione(
     produzione.quantita_prodotta = quantita_prodotta
     produzione.ubicazione_destinazione = ubicazione_destinazione
     produzione.stato = Produzione.Stato.CONFERMATA
+    produzione.pastorizzazione_completata = True
+    produzione.vuoto_controllato = True
 
     if note:
         produzione.note = note
@@ -666,6 +759,8 @@ def conferma_produzione(
             "quantita_prodotta",
             "ubicazione_destinazione",
             "stato",
+            "pastorizzazione_completata",
+            "vuoto_controllato",
             "note",
         ]
     )
@@ -736,15 +831,22 @@ def registra_confezionamento(
             "La quantità confezionata deve essere maggiore di zero."
         )
 
-    if lotto_origine.articolo.categoria != lotto_origine.articolo.Categoria.PRODOTTO_NUDO:
+    if (
+        lotto_origine.articolo.categoria
+        != lotto_origine.articolo.Categoria.PRODOTTO_FINITO
+        or lotto_origine.fase != Lotto.Fase.INVASETTATO
+    ):
         raise ValueError(
-            "Il lotto di origine deve appartenere a un prodotto nudo."
+            "Il lotto di origine deve essere un prodotto invasettato."
         )
 
     if articolo_finito.categoria != articolo_finito.Categoria.PRODOTTO_FINITO:
         raise ValueError(
             "L'articolo di destinazione deve essere un prodotto finito."
         )
+
+    if articolo_finito.pk != lotto_origine.articolo_id:
+        raise ValueError("L'etichettatura non può cambiare l'articolo del lotto.")
 
     if not articolo_finito.attivo:
         raise ValueError(
@@ -845,26 +947,12 @@ def registra_confezionamento(
             }
         )
 
-    codice_lotto = lotto_origine.codice_lotto
-
-    lotto_finito = (
-        Lotto.objects
-        .filter(
-            articolo=articolo_finito,
-            codice_lotto=codice_lotto,
+    if giacenza_origine.quantita != quantita_confezionata:
+        raise ValueError(
+            "Etichetta l'intera quantità del lotto in un'unica operazione."
         )
-        .first()
-    )
 
-    if lotto_finito is None:
-        lotto_finito = Lotto.objects.create(
-            articolo=articolo_finito,
-            codice_lotto=codice_lotto,
-            tipo=Lotto.Tipo.PRODUZIONE,
-            data_produzione=lotto_origine.data_produzione,
-            quantita_iniziale=quantita_confezionata,
-            note=note,
-        )
+    lotto_finito = lotto_origine
 
     confezionamento = Confezionamento.objects.create(
         lotto_origine=lotto_origine,
@@ -907,6 +995,9 @@ def registra_confezionamento(
     giacenza_finito.save(
         update_fields=["quantita"]
     )
+
+    lotto_origine.fase = Lotto.Fase.ETICHETTATO
+    lotto_origine.save(update_fields=["fase"])
 
     Movimento.objects.create(
         tipo=Movimento.Tipo.PACKAGING,
@@ -982,6 +1073,11 @@ def registra_inscatolamento(
     if lotto_prodotto.articolo.categoria != lotto_prodotto.articolo.Categoria.PRODOTTO_FINITO:
         raise ValueError(
             "Il lotto da inscatolare deve appartenere a un prodotto finito."
+        )
+
+    if lotto_prodotto.fase != Lotto.Fase.ETICHETTATO:
+        raise ValueError(
+            "Il lotto deve essere etichettato prima dell'inscatolamento."
         )
 
     if lotto_imballo.articolo.categoria != lotto_imballo.articolo.Categoria.PACKAGING:
@@ -1106,6 +1202,10 @@ def registra_inscatolamento(
         eseguito_da=operatore,
     )
 
+    if quantita_sfusa == quantita_prodotti:
+        lotto_prodotto.fase = Lotto.Fase.INSCATOLATO
+        lotto_prodotto.save(update_fields=["fase"])
+
     return inscatolamento
 
 def proponi_prelievi_articolo(
@@ -1191,6 +1291,7 @@ def proponi_prelievi_articolo(
 
         proposta.append(
             {
+                "giacenza_id": giacenza.pk,
                 "lotto": giacenza.lotto,
                 "ubicazione": giacenza.ubicazione,
                 "disponibile": giacenza.quantita,
@@ -1263,10 +1364,7 @@ def registra_prelievi_semilavorato(
         giacenza = (
             Giacenza.objects
             .select_for_update()
-            .get(
-                lotto=riga["lotto"],
-                ubicazione=riga["ubicazione"],
-            )
+            .get(pk=riga["giacenza_id"])
         )
 
         quantita_prelevata = riga["quantita_proposta"]
@@ -1288,6 +1386,8 @@ def registra_prelievi_semilavorato(
             lotto=giacenza.lotto,
             quantita=quantita_prelevata,
             ubicazione_origine=giacenza.ubicazione,
+            scaffale_origine=giacenza.scaffale,
+            piano_origine=giacenza.piano,
             ubicazione_destinazione=None,
             causale="Prelievo produzione semilavorato",
             note=note,
@@ -1298,6 +1398,8 @@ def registra_prelievi_semilavorato(
             produzione=produzione,
             lotto=giacenza.lotto,
             ubicazione_origine=giacenza.ubicazione,
+            scaffale_origine=giacenza.scaffale,
+            piano_origine=giacenza.piano,
             quantita_prelevata=quantita_prelevata,
             quantita_scarto=None,
             note=note,
@@ -1333,6 +1435,8 @@ def elimina_produzione_semilavorato_bozza(produzione, operatore=None):
         giacenza, _ = Giacenza.objects.select_for_update().get_or_create(
             lotto=prelievo.lotto,
             ubicazione=prelievo.ubicazione_origine,
+            scaffale=prelievo.scaffale_origine,
+            piano=prelievo.piano_origine,
             defaults={"quantita": Decimal("0")},
         )
         giacenza.quantita += prelievo.quantita_prelevata

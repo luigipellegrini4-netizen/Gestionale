@@ -78,6 +78,7 @@ class LottoAdmin(admin.ModelAdmin):
         "codice_lotto",
         "articolo",
         "tipo",
+        "fase",
         "fornitore",
         "data_arrivo",
         "data_produzione",
@@ -86,6 +87,7 @@ class LottoAdmin(admin.ModelAdmin):
     )
     list_filter = (
         "tipo",
+        "fase",
         "articolo",
         "fornitore",
     )
@@ -107,6 +109,8 @@ class GiacenzaAdmin(admin.ModelAdmin):
     list_display = (
         "lotto",
         "ubicazione",
+        "scaffale",
+        "piano",
         "quantita",
     )
     list_filter = (

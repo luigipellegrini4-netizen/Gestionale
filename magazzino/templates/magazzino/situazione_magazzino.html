@@ -143,6 +143,12 @@ Situazione magazzino - MIRA
 
                         <td>
                             {{ giacenza.ubicazione.nome }}
+                            {% if giacenza.scaffale or giacenza.piano %}
+                                <br><small>
+                                    {% if giacenza.scaffale %}Scaffale {{ giacenza.scaffale }}{% endif %}
+                                    {% if giacenza.piano %} · Piano {{ giacenza.piano }}{% endif %}
+                                </small>
+                            {% endif %}
                         </td>
 
                         <td>

@@ -10,7 +10,6 @@ class Articolo(models.Model):
         IGIENE = "IGIENE", "Igiene"
         SEMILAVORATO = "SEMILAVORATO", "Semilavorato"
         PACKAGING = "PACKAGING", "Packaging"
-        PRODOTTO_NUDO = "PRODOTTO_NUDO", "Prodotto nudo"
         PRODOTTO_FINITO = "PRODOTTO_FINITO", "Prodotto finito"
 
     class UnitaMisura(models.TextChoices):
@@ -33,17 +32,6 @@ class Articolo(models.Model):
         max_length=20,
         choices=TipoPackaging.choices,
         blank=True,
-    )
-
-    prodotto_finito_collegato = models.ForeignKey(
-        "self",
-        on_delete=models.PROTECT,
-        null=True,
-        blank=True,
-        related_name="prodotti_nudi_collegati",
-        limit_choices_to={
-            "categoria": "PRODOTTO_FINITO",
-        },
     )
 
     codice = models.CharField(
@@ -69,6 +57,13 @@ class Articolo(models.Model):
     unita_misura = models.CharField(
         max_length=5,
         choices=UnitaMisura.choices,
+    )
+
+    quantita_per_confezione = models.DecimalField(
+        max_digits=12,
+        decimal_places=3,
+        null=True,
+        blank=True,
     )
 
     scorta_minima = models.DecimalField(
@@ -101,6 +96,13 @@ class Articolo(models.Model):
             models.CheckConstraint(
                 condition=models.Q(scorta_minima__gte=0),
                 name="articolo_scorta_minima_non_negativa",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(quantita_per_confezione__isnull=True)
+                    | models.Q(quantita_per_confezione__gt=0)
+                ),
+                name="articolo_quantita_confezione_positiva",
             ),
         ]
 
@@ -200,12 +202,17 @@ class Ubicazione(models.Model):
 
         return posizione
 
-
 class Lotto(models.Model):
 
     class Tipo(models.TextChoices):
         ACQUISTO = "ACQUISTO", "Acquisto"
         PRODUZIONE = "PRODUZIONE", "Produzione"
+
+    class Fase(models.TextChoices):
+        NON_APPLICABILE = "", "Non applicabile"
+        INVASETTATO = "INVASETTATO", "Invasettato"
+        ETICHETTATO = "ETICHETTATO", "Etichettato"
+        INSCATOLATO = "INSCATOLATO", "Inscatolato"
 
     articolo = models.ForeignKey(
         Articolo,
@@ -220,6 +227,13 @@ class Lotto(models.Model):
     tipo = models.CharField(
         max_length=15,
         choices=Tipo.choices,
+    )
+
+    fase = models.CharField(
+        max_length=20,
+        choices=Fase.choices,
+        blank=True,
+        default=Fase.NON_APPLICABILE,
     )
 
     fornitore = models.ForeignKey(
@@ -290,10 +304,13 @@ class Giacenza(models.Model):
         default=0,
     )
 
+    scaffale = models.CharField(max_length=30, blank=True)
+    piano = models.CharField(max_length=30, blank=True)
+
     class Meta:
         constraints = [
             models.UniqueConstraint(
-                fields=["lotto", "ubicazione"],
+                fields=["lotto", "ubicazione", "scaffale", "piano"],
                 name="unica_giacenza_lotto_ubicazione",
             ),
             models.CheckConstraint(
@@ -362,6 +379,11 @@ class Movimento(models.Model):
     note = models.TextField(
         blank=True,
     )
+
+    scaffale_origine = models.CharField(max_length=30, blank=True)
+    piano_origine = models.CharField(max_length=30, blank=True)
+    scaffale_destinazione = models.CharField(max_length=30, blank=True)
+    piano_destinazione = models.CharField(max_length=30, blank=True)
 
     eseguito_da = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -472,7 +494,7 @@ class Produzione(models.Model):
         on_delete=models.PROTECT,
         related_name="produzioni",
         limit_choices_to={
-            "categoria": "PRODOTTO_NUDO",
+            "categoria": "PRODOTTO_FINITO",
         },
     )
 
@@ -514,6 +536,9 @@ class Produzione(models.Model):
         blank=True,
     )
 
+    pastorizzazione_completata = models.BooleanField(default=False)
+    vuoto_controllato = models.BooleanField(default=False)
+
     data_creazione = models.DateTimeField(
         auto_now_add=True,
     )
@@ -527,12 +552,73 @@ class Produzione(models.Model):
         )
 
 
+class TankProduzione(models.Model):
+    produzione = models.ForeignKey(
+        Produzione,
+        on_delete=models.CASCADE,
+        related_name="tank",
+    )
+    numero = models.PositiveSmallIntegerField()
+    numero_batch = models.PositiveSmallIntegerField()
+    gradi_brix = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        null=True,
+        blank=True,
+    )
+    ph = models.DecimalField(
+        max_digits=4,
+        decimal_places=2,
+        null=True,
+        blank=True,
+    )
+    data_creazione = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["numero"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["produzione", "numero"],
+                name="unico_numero_tank_per_produzione",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(numero_batch__gte=1, numero_batch__lte=5),
+                name="tank_numero_batch_da_uno_a_cinque",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(gradi_brix__isnull=True)
+                | models.Q(gradi_brix__gte=0),
+                name="tank_brix_non_negativo",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(ph__isnull=True)
+                | models.Q(ph__gte=0, ph__lte=14),
+                name="tank_ph_valido",
+            ),
+        ]
+
+    @property
+    def controllato(self):
+        return self.gradi_brix is not None and self.ph is not None
+
+    def __str__(self):
+        return f"Produzione {self.produzione_id} - Tank {self.numero}"
+
+
 class PrelievoProduzione(models.Model):
 
     produzione = models.ForeignKey(
         Produzione,
         on_delete=models.CASCADE,
         related_name="prelievi",
+    )
+
+    tank = models.ForeignKey(
+        TankProduzione,
+        on_delete=models.CASCADE,
+        related_name="prelievi",
+        null=True,
+        blank=True,
     )
 
     lotto = models.ForeignKey(
@@ -546,6 +632,9 @@ class PrelievoProduzione(models.Model):
         on_delete=models.PROTECT,
         related_name="prelievi_produzione",
     )
+
+    scaffale_origine = models.CharField(max_length=30, blank=True)
+    piano_origine = models.CharField(max_length=30, blank=True)
 
     quantita_prelevata = models.DecimalField(
         max_digits=12,
@@ -662,6 +751,9 @@ class PrelievoProduzioneSemilavorato(models.Model):
         on_delete=models.PROTECT,
         related_name="prelievi_produzione_semilavorato",
     )
+
+    scaffale_origine = models.CharField(max_length=30, blank=True)
+    piano_origine = models.CharField(max_length=30, blank=True)
 
     quantita_prelevata = models.DecimalField(
         max_digits=12,

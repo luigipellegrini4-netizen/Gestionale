@@ -1,7 +1,38 @@
 from django.test import TestCase
 
-from .forms import RicettaForm, RigaRicettaForm
+from .forms import ArticoloForm, RicettaForm, RigaRicettaForm
 from .models import Articolo, Ricetta
+
+
+class ArticoloFormTests(TestCase):
+    def dati_validi(self):
+        return {
+            "codice": "ART-FORM",
+            "descrizione": "Articolo form",
+            "nome_produzione": "",
+            "categoria": Articolo.Categoria.MATERIA_PRIMA,
+            "unita_misura": Articolo.UnitaMisura.KG,
+            "quantita_per_confezione": "1.250",
+            "scorta_minima": "0",
+            "criterio_rotazione": Articolo.CriterioRotazione.FIFO,
+            "tipo_packaging": "",
+            "pezzi_per_imballo": "",
+            "attivo": "on",
+            "note": "",
+        }
+
+    def test_accetta_quantita_per_confezione_positiva(self):
+        form = ArticoloForm(data=self.dati_validi())
+
+        self.assertTrue(form.is_valid(), form.errors)
+
+    def test_rifiuta_quantita_per_confezione_non_positiva(self):
+        dati = self.dati_validi()
+        dati["quantita_per_confezione"] = "0"
+        form = ArticoloForm(data=dati)
+
+        self.assertFalse(form.is_valid())
+        self.assertIn("quantita_per_confezione", form.errors)
 
 
 class RicettaFormTests(TestCase):
@@ -10,7 +41,7 @@ class RicettaFormTests(TestCase):
         cls.prodotto = Articolo.objects.create(
             codice="RIC-FORM",
             descrizione="Prodotto ricetta form",
-            categoria=Articolo.Categoria.PRODOTTO_NUDO,
+            categoria=Articolo.Categoria.PRODOTTO_FINITO,
             unita_misura=Articolo.UnitaMisura.KG,
         )
         cls.ingrediente = Articolo.objects.create(

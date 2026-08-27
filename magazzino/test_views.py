@@ -32,6 +32,7 @@ class SituazioneMagazzinoTests(TestCase):
             descrizione="Prodotto finito test",
             categoria=Articolo.Categoria.PRODOTTO_FINITO,
             unita_misura=Articolo.UnitaMisura.PZ,
+            quantita_per_confezione=Decimal("0.250"),
         )
         cls.imballo = Articolo.objects.create(
             codice="SCATOLA-TEST",
@@ -104,6 +105,15 @@ class SituazioneMagazzinoTests(TestCase):
             self.assertEqual(giacenza.quantita_totale, Decimal("10"))
             self.assertEqual(giacenza.quantita_inscatolata, Decimal("6"))
             self.assertEqual(giacenza.quantita_sfusa, Decimal("4"))
+
+    def test_dettaglio_articolo_mostra_quantita_per_confezione(self):
+        response = self.client.get(
+            reverse("dettaglio_articolo", args=[self.prodotto.pk])
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Quantità per confezione")
+        self.assertContains(response, "0,250")
 
     def test_numero_query_non_cresce_per_articolo_o_lotto(self):
         with CaptureQueriesContext(connection) as queries:
@@ -362,7 +372,7 @@ class ElencoRicetteSeparateTests(TestCase):
             codice="PROD-RIC",
             descrizione="Prodotto ricetta",
             nome_produzione="Prodotto operativo",
-            categoria=Articolo.Categoria.PRODOTTO_NUDO,
+            categoria=Articolo.Categoria.PRODOTTO_FINITO,
             unita_misura=Articolo.UnitaMisura.KG,
         )
         semilavorato = Articolo.objects.create(
@@ -396,6 +406,14 @@ class ElencoRicetteSeparateTests(TestCase):
             [self.ricetta_semilavorato],
         )
 
+    def test_elenco_ricette_non_filtra_per_fase_del_lotto(self):
+        self.client.force_login(self.user)
+
+        response = self.client.get(reverse("elenco_ricette"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, self.ricetta_prodotto.nome)
+
 
 class DashboardTests(TestCase):
     @classmethod
@@ -414,7 +432,7 @@ class DashboardTests(TestCase):
         cls.prodotto = Articolo.objects.create(
             codice="PROD-DASH",
             descrizione="Prodotto dashboard",
-            categoria=Articolo.Categoria.PRODOTTO_NUDO,
+            categoria=Articolo.Categoria.PRODOTTO_FINITO,
             unita_misura=Articolo.UnitaMisura.KG,
         )
         cls.ubicazione = Ubicazione.objects.create(

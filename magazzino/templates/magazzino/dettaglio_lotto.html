@@ -38,6 +38,13 @@
             {{ lotto.tipo }}
         </div>
 
+        {% if lotto.fase %}
+        <div>
+            <strong>Fase produttiva</strong>
+            {{ lotto.get_fase_display }}
+        </div>
+        {% endif %}
+
         <div>
             <strong>Fornitore</strong>
             {% if lotto.fornitore %}
@@ -217,6 +224,12 @@
 
                             <td>
                                 {{ giacenza.ubicazione.nome }}
+                                {% if giacenza.scaffale or giacenza.piano %}
+                                    <br><small>
+                                        {% if giacenza.scaffale %}Scaffale {{ giacenza.scaffale }}{% endif %}
+                                        {% if giacenza.piano %} · Piano {{ giacenza.piano }}{% endif %}
+                                    </small>
+                                {% endif %}
                             </td>
 
                             <td>

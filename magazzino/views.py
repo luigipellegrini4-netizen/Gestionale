@@ -19,6 +19,8 @@ from .forms import (
     IngredienteProduzioneForm,
     ScartoProduzioneForm,
     ConfermaProduzioneForm,
+    AperturaTankForm,
+    ControlloTankForm,
     ConfezionamentoForm,
     InscatolamentoForm,
     ProduzioneSemilavoratoForm,
@@ -39,6 +41,8 @@ from .services import (
     registra_prelievi_produzione,
     registra_scarto_prelievo_produzione,
     conferma_produzione,
+    apri_tank_produzione,
+    registra_controlli_tank,
     registra_confezionamento,
     registra_inscatolamento,
     registra_prelievi_semilavorato,
@@ -81,6 +85,8 @@ def nuovo_carico(request):
                     fornitore=form.cleaned_data["fornitore"],
                     quantita=form.cleaned_data["quantita"],
                     ubicazione=form.cleaned_data["ubicazione"],
+                    scaffale=form.cleaned_data["scaffale"],
+                    piano=form.cleaned_data["piano"],
                     data_arrivo=form.cleaned_data["data_arrivo"],
                     data_scadenza=form.cleaned_data["data_scadenza"],
                     causale=form.cleaned_data["causale"],
@@ -120,8 +126,16 @@ def trasferimento(request):
                     lotto=form.cleaned_data["giacenza"].lotto,
                     quantita=form.cleaned_data["quantita"],
                     ubicazione_origine=form.cleaned_data["giacenza"].ubicazione,
+                    scaffale_origine=form.cleaned_data["giacenza"].scaffale,
+                    piano_origine=form.cleaned_data["giacenza"].piano,
                     ubicazione_destinazione=form.cleaned_data[
                         "ubicazione_destinazione"
+                    ],
+                    scaffale_destinazione=form.cleaned_data[
+                        "scaffale_destinazione"
+                    ],
+                    piano_destinazione=form.cleaned_data[
+                        "piano_destinazione"
                     ],
                     note=form.cleaned_data["note"],
                     operatore=request.user,
@@ -171,7 +185,18 @@ def disponibilita_trasferimento(request):
                 {
                     "id": giacenza.pk,
                     "lotto": giacenza.lotto.codice_lotto,
-                    "posizione": str(giacenza.ubicazione),
+                    "posizione": " - ".join(
+                        parte
+                        for parte in [
+                            str(giacenza.ubicazione),
+                            (
+                                f"Scaffale {giacenza.scaffale}"
+                                if giacenza.scaffale else ""
+                            ),
+                            f"Piano {giacenza.piano}" if giacenza.piano else "",
+                        ]
+                        if parte
+                    ),
                     "ubicazione_id": giacenza.ubicazione_id,
                     "quantita": str(giacenza.quantita),
                     "unita_misura": giacenza.lotto.articolo.unita_misura,
@@ -278,6 +303,8 @@ def consumo(request):
                     ubicazione_origine=form.cleaned_data[
                         "ubicazione_origine"
                     ],
+                    scaffale_origine=form.cleaned_data["scaffale_origine"],
+                    piano_origine=form.cleaned_data["piano_origine"],
                     causale=form.cleaned_data["causale"],
                     note=form.cleaned_data["note"],
                     operatore=request.user,
@@ -796,7 +823,7 @@ def elenco_ricette(request):
     )
     ricette_prodotti = Paginator(
         ricette_queryset.filter(
-            articolo__categoria=Articolo.Categoria.PRODOTTO_NUDO,
+            articolo__categoria=Articolo.Categoria.PRODOTTO_FINITO,
         ),
         50,
     ).get_page(request.GET.get("prodotti_page"))
@@ -1391,6 +1418,7 @@ def gestione_produzione(request, pk):
         .prefetch_related(
             "prelievi__lotto__articolo",
             "prelievi__ubicazione_origine",
+            "tank__prelievi",
             "articolo__ricette__righe__articolo",
         ),
         pk=pk,
@@ -1410,6 +1438,42 @@ def gestione_produzione(request, pk):
     )
 
     conferma_form = ConfermaProduzioneForm()
+    apertura_tank_form = AperturaTankForm()
+    controllo_tank_form = ControlloTankForm()
+    tank_corrente = produzione.tank.filter(
+        gradi_brix__isnull=True,
+    ).order_by("numero").first()
+
+    if request.method == "POST" and request.POST.get("azione") == "apri_tank":
+        apertura_tank_form = AperturaTankForm(request.POST)
+        if apertura_tank_form.is_valid():
+            try:
+                apri_tank_produzione(
+                    produzione,
+                    apertura_tank_form.cleaned_data["numero_batch"],
+                )
+            except ValueError as errore:
+                apertura_tank_form.add_error(None, str(errore))
+            else:
+                messages.success(request, "Tank aperto correttamente.")
+                return redirect("gestione_produzione", pk=produzione.pk)
+
+    if request.method == "POST" and request.POST.get("azione") == "controlla_tank":
+        controllo_tank_form = ControlloTankForm(request.POST)
+        if tank_corrente is None:
+            controllo_tank_form.add_error(None, "Non c'è un tank aperto.")
+        elif controllo_tank_form.is_valid():
+            try:
+                registra_controlli_tank(
+                    tank_corrente,
+                    controllo_tank_form.cleaned_data["gradi_brix"],
+                    controllo_tank_form.cleaned_data["ph"],
+                )
+            except ValueError as errore:
+                controllo_tank_form.add_error(None, str(errore))
+            else:
+                messages.success(request, "Controlli del tank registrati.")
+                return redirect("gestione_produzione", pk=produzione.pk)
 
     if (
         request.method == "POST"
@@ -1483,21 +1547,23 @@ def gestione_produzione(request, pk):
             )
 
         elif ingrediente_form.is_valid():
+            if tank_corrente is None:
+                ingrediente_form.add_error(None, "Apri un tank prima dei prelievi.")
+                prelievi_creati = None
+            else:
+                prelievi_creati = None
             try:
-                prelievi_creati = registra_prelievi_produzione(
-                    produzione=produzione,
-                    articolo=ingrediente_form.cleaned_data[
-                        "articolo"
-                    ],
-                    quantita_richiesta=ingrediente_form.cleaned_data[
-                        "quantita_richiesta"
-                    ],
-                    note=(
-                        f"Prelievo per produzione "
-                        f"{produzione.pk}"
-                    ),
-                    operatore=request.user,
-                )
+                if tank_corrente is not None:
+                    prelievi_creati = registra_prelievi_produzione(
+                        produzione=produzione,
+                        articolo=ingrediente_form.cleaned_data["articolo"],
+                        quantita_richiesta=ingrediente_form.cleaned_data[
+                            "quantita_richiesta"
+                        ],
+                        note=f"Prelievo per produzione {produzione.pk}",
+                        operatore=request.user,
+                        tank=tank_corrente,
+                    )
 
             except ValueError as errore:
                 ingrediente_form.add_error(
@@ -1506,16 +1572,19 @@ def gestione_produzione(request, pk):
                 )
 
             else:
-                messages.success(
-                    request,
-                    f"Prelievo registrato correttamente "
-                    f"su {len(prelievi_creati)} lotto/i.",
-                )
+                if prelievi_creati is None:
+                    pass
+                else:
+                    messages.success(
+                        request,
+                        f"Prelievo registrato correttamente "
+                        f"su {len(prelievi_creati)} lotto/i.",
+                    )
 
-                return redirect(
-                    "gestione_produzione",
-                    pk=produzione.pk,
-                )
+                    return redirect(
+                        "gestione_produzione",
+                        pk=produzione.pk,
+                    )
 
     if (
         request.method == "POST"
@@ -1561,6 +1630,12 @@ def gestione_produzione(request, pk):
                             "note"
                         ],
                         operatore=request.user,
+                        pastorizzazione_completata=conferma_form.cleaned_data[
+                            "pastorizzazione_completata"
+                        ],
+                        vuoto_controllato=conferma_form.cleaned_data[
+                            "vuoto_controllato"
+                        ],
                     )
 
                 except ValueError as errore:
@@ -1589,9 +1664,15 @@ def gestione_produzione(request, pk):
     ingredienti_ricetta = []
 
     if ricetta is not None:
-        ingredienti_ricetta = ricetta.righe.select_related(
-            "articolo",
-        ).all()
+        moltiplicatore = tank_corrente.numero_batch if tank_corrente else 1
+        ingredienti_ricetta = [
+            {
+                "riga": riga,
+                "quantita_prevista": riga.quantita * moltiplicatore,
+                "quantita_input": format(riga.quantita * moltiplicatore, "f"),
+            }
+            for riga in ricetta.righe.select_related("articolo").all()
+        ]
 
     return render(
         request,
@@ -1603,6 +1684,10 @@ def gestione_produzione(request, pk):
             "prelievi": prelievi,
             "ingrediente_form": ingrediente_form,
             "conferma_form": conferma_form,
+            "tank": produzione.tank.all(),
+            "tank_corrente": tank_corrente,
+            "apertura_tank_form": apertura_tank_form,
+            "controllo_tank_form": controllo_tank_form,
         },
     )
 
@@ -1616,33 +1701,15 @@ def nuovo_confezionamento(request):
 
         if form.is_valid():
             lotto_origine = form.cleaned_data["lotto_origine"]
+            lotto_etichetta = form.cleaned_data["lotto_etichetta"]
+            consumi = {
+                lotto_etichetta: form.cleaned_data["quantita_confezionata"],
+            }
 
-            articolo_finito = (
-                lotto_origine.articolo.prodotto_finito_collegato
-            )
-
-            if articolo_finito is None:
-                form.add_error(
-                    "lotto_origine",
-                    "Il prodotto nudo selezionato non ha "
-                    "un prodotto finito collegato.",
-                )
-
-            else:
-                lotto_etichetta = form.cleaned_data[
-                    "lotto_etichetta"
-                ]
-
-                consumi = {
-                    lotto_etichetta: form.cleaned_data[
-                        "quantita_confezionata"
-                    ],
-                }
-
-                try:
-                    confezionamento = registra_confezionamento(
+            try:
+                confezionamento = registra_confezionamento(
                         lotto_origine=lotto_origine,
-                        articolo_finito=articolo_finito,
+                        articolo_finito=lotto_origine.articolo,
                         quantita_confezionata=form.cleaned_data[
                             "quantita_confezionata"
                         ],
@@ -1658,23 +1725,20 @@ def nuovo_confezionamento(request):
                         ],
                         note=form.cleaned_data["note"],
                         operatore=request.user,
-                    )
+                )
 
-                except ValueError as errore:
-                    form.add_error(
-                        None,
-                        str(errore),
-                    )
+            except ValueError as errore:
+                form.add_error(None, str(errore))
 
-                else:
-                    messages.success(
+            else:
+                messages.success(
                         request,
                         f"Confezionamento del lotto "
                         f"{confezionamento.lotto_origine.codice_lotto} "
                         f"registrato correttamente.",
-                    )
+                )
 
-                    return render(
+                return render(
                         request,
                         "magazzino/nuovo_confezionamento.html",
                         {
@@ -1682,7 +1746,7 @@ def nuovo_confezionamento(request):
                             "confezionamento": confezionamento,
                             "confezionamento_completato": True,
                         },
-                    )
+                )
 
     else:
         form = ConfezionamentoForm()

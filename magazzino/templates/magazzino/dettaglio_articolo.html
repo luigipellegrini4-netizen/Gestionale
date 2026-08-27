@@ -70,6 +70,16 @@
             {{ articolo.unita_misura }}
         </div>
 
+        {% if articolo.quantita_per_confezione %}
+
+            <div>
+                <strong>Quantità per confezione</strong>
+                {{ articolo.quantita_per_confezione }}
+                {{ articolo.unita_misura }}
+            </div>
+
+        {% endif %}
+
         <div>
             <strong>Scorta minima</strong>
             {{ articolo.scorta_minima }}
@@ -103,19 +113,8 @@
         {% if articolo.pezzi_per_imballo %}
 
             <div>
-                <strong>Pezzi per imballo</strong>
+                <strong>Confezioni per imballo</strong>
                 {{ articolo.pezzi_per_imballo }}
-            </div>
-
-        {% endif %}
-
-        {% if articolo.prodotto_finito_collegato %}
-
-            <div>
-                <strong>Prodotto finito collegato</strong>
-                {{ articolo.prodotto_finito_collegato.codice }}
-                -
-                {{ articolo.prodotto_finito_collegato.descrizione }}
             </div>
 
         {% endif %}
@@ -191,6 +190,12 @@
 
                             <td>
                                 {{ giacenza.ubicazione.nome }}
+                                {% if giacenza.scaffale or giacenza.piano %}
+                                    <br><small>
+                                        {% if giacenza.scaffale %}Scaffale {{ giacenza.scaffale }}{% endif %}
+                                        {% if giacenza.piano %} · Piano {{ giacenza.piano }}{% endif %}
+                                    </small>
+                                {% endif %}
                             </td>
 
                             <td>

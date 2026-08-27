@@ -11,7 +11,7 @@ from .models import (
     Articolo, Confezionamento, ConsumoConfezionamento, Fornitore,
     Giacenza, Inscatolamento, Lotto, Movimento, PrelievoProduzione,
     PrelievoProduzioneSemilavorato, Produzione, ProduzioneSemilavorato,
-    RegistroOperazione, Ricetta, RigaRicetta, Ubicazione,
+    RegistroOperazione, Ricetta, RigaRicetta, TankProduzione, Ubicazione,
 )
 
 
@@ -19,7 +19,8 @@ FORMATO = "MIRA_BACKUP"
 VERSIONE = 1
 MODELLI = [
     Fornitore, Ubicazione, Articolo, Lotto, Giacenza, Movimento, Ricetta,
-    RigaRicetta, Produzione, PrelievoProduzione, ProduzioneSemilavorato,
+    RigaRicetta, Produzione, TankProduzione, PrelievoProduzione,
+    ProduzioneSemilavorato,
     PrelievoProduzioneSemilavorato, Confezionamento,
     ConsumoConfezionamento, Inscatolamento,
     RegistroOperazione,
@@ -28,7 +29,8 @@ MODELLI_AMMESSI = {modello._meta.label_lower for modello in MODELLI}
 ORDINE_ELIMINAZIONE = [
     RegistroOperazione, ConsumoConfezionamento, Inscatolamento, Confezionamento,
     PrelievoProduzioneSemilavorato, PrelievoProduzione,
-    ProduzioneSemilavorato, Produzione, RigaRicetta, Ricetta, Movimento,
+    TankProduzione, ProduzioneSemilavorato, Produzione,
+    RigaRicetta, Ricetta, Movimento,
     Giacenza, Lotto, Articolo, Ubicazione, Fornitore,
 ]
 
@@ -104,7 +106,6 @@ def ripristina_backup(contenuto):
     (cartella / nome).write_text(crea_backup(), encoding="utf-8")
 
     with transaction.atomic(), connection.constraint_checks_disabled():
-        Articolo.objects.update(prodotto_finito_collegato=None)
         for modello in ORDINE_ELIMINAZIONE:
             modello.objects.all().delete()
         for oggetto in oggetti:

@@ -6,11 +6,11 @@ Nuovo confezionamento
 
 {% block content %}
 
-<h2>Nuovo confezionamento</h2>
+<h2>Nuova etichettatura</h2>
 
 {% if confezionamento_completato %}
     <div class="card">
-        <h3>Confezionamento completato</h3>
+        <h3>Etichettatura completata</h3>
 
         <p>
             <strong>Lotto origine:</strong>
@@ -18,14 +18,14 @@ Nuovo confezionamento
         </p>
 
         <p>
-            <strong>Prodotto finito:</strong>
+            <strong>Prodotto:</strong>
             {{ confezionamento.articolo_finito.codice }}
             -
             {{ confezionamento.articolo_finito.descrizione }}
         </p>
 
         <p>
-            <strong>Lotto finito:</strong>
+            <strong>Lotto etichettato:</strong>
             {{ confezionamento.lotto_finito.codice_lotto }}
         </p>
 
@@ -105,7 +105,7 @@ Nuovo confezionamento
         </div>
 
         <button type="submit">
-            Registra confezionamento
+            Registra etichettatura
         </button>
 
     </form>
