@@ -25,6 +25,10 @@ Aggiungi ingrediente - {{ ricetta.nome }}
         — Versione {{ ricetta.versione }}
     </p>
 
+    <div class="message">
+        Inserisci la quantità prevista di ogni ingrediente per <strong>1 batch</strong>.
+    </div>
+
     <form method="post">
 
         {% csrf_token %}

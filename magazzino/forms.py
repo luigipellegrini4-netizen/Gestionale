@@ -280,6 +280,15 @@ class ArticoloProduzioneChoiceField(forms.ModelChoiceField):
 
 class RicettaForm(forms.ModelForm):
 
+    tipo_prodotto = forms.ChoiceField(
+        choices=[
+            ("", "Seleziona il tipo di prodotto"),
+            (Articolo.Categoria.SEMILAVORATO, "Semilavorati"),
+            (Articolo.Categoria.PRODOTTO_FINITO, "Prodotti finiti"),
+        ],
+        label="Tipo di prodotto",
+    )
+
     articolo = ArticoloProduzioneChoiceField(
         queryset=Articolo.objects.none(),
         label="Prodotto",
@@ -289,9 +298,9 @@ class RicettaForm(forms.ModelForm):
         model = Ricetta
 
         fields = [
+            "tipo_prodotto",
             "articolo",
             "nome",
-            "versione",
             "attiva",
             "note",
         ]
@@ -299,7 +308,6 @@ class RicettaForm(forms.ModelForm):
         labels = {
             "articolo": "Prodotto",
             "nome": "Nome ricetta",
-            "versione": "Versione",
             "attiva": "Ricetta attiva",
             "note": "Note",
         }
@@ -314,18 +322,32 @@ class RicettaForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-
-        self.fields["articolo"].queryset = (
-            Articolo.objects.filter(
-                attivo=True,
-                categoria__in=[
-                    Articolo.Categoria.SEMILAVORATO,
-                    Articolo.Categoria.PRODOTTO_FINITO,
-                ],
-            ).order_by(
-                "codice",
-            )
+        tipo = (
+            self.data.get(self.add_prefix("tipo_prodotto"))
+            if self.is_bound
+            else None
         )
+        if self.instance.pk:
+            tipo = tipo or self.instance.articolo.categoria
+            self.fields["tipo_prodotto"].initial = tipo
+        else:
+            tipo = tipo or self.initial.get("tipo_prodotto")
+
+        categorie_ammesse = {
+            Articolo.Categoria.SEMILAVORATO,
+            Articolo.Categoria.PRODOTTO_FINITO,
+        }
+        queryset = Articolo.objects.none()
+        if tipo in categorie_ammesse:
+            queryset = Articolo.objects.filter(
+                attivo=True,
+                categoria=tipo,
+            ).order_by("codice")
+        self.fields["articolo"].queryset = queryset
+
+        if self.instance.pk:
+            self.fields["tipo_prodotto"].disabled = True
+            self.fields["articolo"].disabled = True
 
     def clean(self):
         cleaned_data = super().clean()
@@ -346,6 +368,24 @@ class RicettaForm(forms.ModelForm):
 
         return cleaned_data
 
+    def save(self, commit=True):
+        nuova = self.instance.pk is None
+        ricetta = super().save(commit=False)
+        if nuova:
+            versioni = Ricetta.objects.filter(
+                articolo=ricetta.articolo,
+            ).values_list("versione", flat=True)
+            versioni_numeriche = [
+                int(versione)
+                for versione in versioni
+                if str(versione).isdigit()
+            ]
+            ricetta.versione = str(max(versioni_numeriche, default=0) + 1)
+        if commit:
+            ricetta.save()
+            self.save_m2m()
+        return ricetta
+
 
 class RigaRicettaForm(forms.ModelForm):
 
@@ -361,7 +401,7 @@ class RigaRicettaForm(forms.ModelForm):
 
         labels = {
             "articolo": "Ingrediente / materiale",
-            "quantita": "Quantità",
+            "quantita": "Quantità per 1 batch",
             "ingrediente_prodotto": "Entra nel prodotto",
             "note": "Note",
         }
@@ -494,10 +534,9 @@ class IngredienteProduzioneForm(forms.Form):
 class AperturaTankForm(forms.Form):
     numero_batch = forms.IntegerField(
         min_value=1,
-        max_value=5,
         initial=5,
         label="Numero di batch",
-        help_text="Un tank può contenere da 1 a 5 batch Robocubo.",
+        help_text="Numero di cicli Robocubo destinati al tank.",
     )
 
 

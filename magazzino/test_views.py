@@ -106,6 +106,28 @@ class SituazioneMagazzinoTests(TestCase):
             self.assertEqual(giacenza.quantita_inscatolata, Decimal("6"))
             self.assertEqual(giacenza.quantita_sfusa, Decimal("4"))
 
+    def test_tabelle_sono_ordinate_per_categoria_e_ubicazione(self):
+        Giacenza.objects.create(
+            lotto=self.lotto_imballo,
+            ubicazione=self.ubicazione_a,
+            quantita=Decimal("2"),
+        )
+
+        response = self.client.get(reverse("situazione_magazzino"))
+
+        articoli = list(response.context["articoli"])
+        self.assertEqual([a.pk for a in articoli], [self.imballo.pk, self.prodotto.pk])
+
+        giacenze = list(response.context["giacenze"])
+        self.assertEqual(
+            [(g.ubicazione.nome, g.lotto.articolo.descrizione) for g in giacenze],
+            [
+                ("Prodotti finiti A", "Prodotto finito test"),
+                ("Prodotti finiti A", "Scatola test"),
+                ("Prodotti finiti B", "Prodotto finito test"),
+            ],
+        )
+
     def test_dettaglio_articolo_mostra_quantita_per_confezione(self):
         response = self.client.get(
             reverse("dettaglio_articolo", args=[self.prodotto.pk])

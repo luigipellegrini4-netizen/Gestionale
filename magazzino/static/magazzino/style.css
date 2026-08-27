@@ -783,3 +783,103 @@ button:hover {
         font-size: 10px;
     }
 }
+/* Messaggi operativi, in particolare errori di disponibilità magazzino. */
+.message {
+    margin: 0 0 1.25rem;
+    padding: 1rem 1.25rem;
+    border: 2px solid #256b45;
+    border-radius: 8px;
+    background: #edf8f1;
+    color: #173d2a;
+    font-weight: 700;
+}
+
+.message.error {
+    border: 3px solid #b42318;
+    background: #fff0ee;
+    color: #8a1c13;
+    box-shadow: 0 0 0 4px rgba(180, 35, 24, 0.12);
+    font-size: 1.08rem;
+}
+
+.system-messages {
+    position: fixed;
+    top: 20px;
+    left: 50%;
+    z-index: 10000;
+    width: min(720px, calc(100vw - 32px));
+    transform: translateX(-50%);
+}
+
+.system-message {
+    margin-bottom: 14px;
+    padding: 18px 20px;
+    border-width: 3px;
+    box-shadow: 0 12px 36px rgba(0, 0, 0, 0.32);
+    font-size: 1.08rem;
+}
+
+.system-message:focus {
+    outline: 4px solid #111827;
+    outline-offset: 3px;
+}
+
+.system-message-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+    margin-bottom: 8px;
+    font-size: 1.12rem;
+}
+
+.system-message-close {
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    border: 2px solid currentColor;
+    border-radius: 50%;
+    background: transparent;
+    color: inherit;
+    font-size: 27px;
+    font-weight: 800;
+    line-height: 28px;
+    cursor: pointer;
+}
+
+.system-message.warning {
+    border-color: #9a6700;
+    background: #fff4ce;
+    color: #5f3b00;
+}
+
+.system-message.info {
+    border-color: #175cd3;
+    background: #eff8ff;
+    color: #123b70;
+}
+
+.errorlist,
+.form-error,
+.alert-danger,
+p.error {
+    margin: 8px 0;
+    padding: 10px 12px;
+    border: 2px solid #b42318;
+    border-radius: 6px;
+    background: #fff0ee;
+    color: #8a1c13;
+    font-weight: 700;
+}
+
+@media (max-width: 560px) {
+    .system-messages {
+        top: 10px;
+        width: calc(100vw - 20px);
+    }
+
+    .system-message {
+        padding: 14px;
+        font-size: 1rem;
+    }
+}

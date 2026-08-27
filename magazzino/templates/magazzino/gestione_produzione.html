@@ -138,91 +138,98 @@ Produzione {{ produzione.articolo.codice }} - MIRA
 
     {% if ingredienti_ricetta %}
 
-        <table>
-
-            <thead>
-
-                <tr>
-                    <th>Articolo</th>
-                    <th>Quantità teorica</th>
-                    <th>Unità</th>
-                    <th>Entra nel prodotto</th>
-                    {% if tank_corrente and produzione.stato == "BOZZA" %}<th>Prelievo effettivo</th>{% endif %}
-                </tr>
-
-            </thead>
-
-            <tbody>
-
-                {% for riga in ingredienti_ricetta %}
-
+        <form method="post">
+            {% csrf_token %}
+            <input type="hidden" name="azione" value="registra_ingredienti_tank">
+            <table>
+                <thead>
                     <tr>
-
-                        <td>
-                            {{ riga.riga.articolo.codice }}
-                            -
-                            {{ riga.riga.articolo.descrizione }}
-                        </td>
-
-                        {% if tank_corrente and produzione.stato == "BOZZA" %}
-                        <td>
-                            <form method="post">
-                                {% csrf_token %}
-                                <input type="hidden" name="azione" value="aggiungi_ingrediente">
-                                <input type="hidden" name="articolo" value="{{ riga.riga.articolo.pk }}">
-                                <input type="number" name="quantita_richiesta" min="0.001" step="0.001" value="{{ riga.quantita_input }}" required>
-                                <button type="submit" class="btn">Registra prelievo</button>
-                            </form>
-                        </td>
-                        {% endif %}
-
-                        <td>
-                            {{ riga.quantita_prevista }}
-                        </td>
-
-                        <td>
-                            {{ riga.riga.articolo.unita_misura }}
-                        </td>
-
-                        <td>
-                            {% if riga.riga.ingrediente_prodotto %}
-                                Sì
-                            {% else %}
-                                No
-                            {% endif %}
-                        </td>
-
+                        <th>Articolo</th>
+                        <th>Quantità teorica</th>
+                        <th>Unità</th>
+                        <th>Entra nel prodotto</th>
+                        {% if tank_corrente and produzione.stato == "BOZZA" %}<th>Quantità effettiva</th>{% endif %}
+                        {% if tank_corrente and produzione.stato == "BOZZA" %}<th>Note prelievo</th>{% endif %}
                     </tr>
-
-                {% endfor %}
-
-            </tbody>
-
-        </table>
+                </thead>
+                <tbody>
+                    {% for riga in ingredienti_ricetta %}
+                        <tr>
+                            <td>{{ riga.riga.articolo.codice }} - {{ riga.riga.articolo.descrizione }}</td>
+                            <td>{{ riga.quantita_prevista }}</td>
+                            <td>{{ riga.riga.articolo.unita_misura }}</td>
+                            <td>{% if riga.riga.ingrediente_prodotto %}Sì{% else %}No{% endif %}</td>
+                            {% if tank_corrente and produzione.stato == "BOZZA" %}
+                                <td>
+                                    <input type="number" name="quantita_{{ riga.riga.articolo.pk }}" min="0.001" step="0.001" value="{{ riga.quantita_input }}" required>
+                                </td>
+                                <td>
+                                    <input type="text" name="note_prelievo_{{ riga.riga.articolo.pk }}" placeholder="Note sull'articolo">
+                                </td>
+                            {% endif %}
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% if tank_corrente and produzione.stato == "BOZZA" and not tank_corrente.prelievi.exists %}
+                <div class="form-actions">
+                    <button type="submit" class="btn">Registra tutti i prelievi del tank</button>
+                </div>
+            {% endif %}
+        </form>
 
     {% endif %}
 
 </div>
 
-{% if tank_corrente and produzione.stato == "BOZZA" %}
+{% endif %}
+
+{% if scarti_tank_mancanti and produzione.stato == "BOZZA" %}
 <div class="card">
-    <h3>Controlli Tank {{ tank_corrente.numero }}</h3>
-    <p>Registra i controlli dopo aver completato prelievi e scarti.</p>
+    <h3>Registra scarti Tank {{ tank_corrente.numero }}</h3>
     <form method="post">
         {% csrf_token %}
-        <input type="hidden" name="azione" value="controlla_tank">
-        {{ controllo_tank_form.as_p }}
-        <button type="submit" class="btn">Registra °Brix e pH</button>
+        <input type="hidden" name="azione" value="registra_scarti_tank">
+        <table>
+            <thead>
+                <tr>
+                    <th>Articolo</th>
+                    <th>Lotto</th>
+                    <th>Prelevato</th>
+                    <th>Unità</th>
+                    <th>Scarto effettivo</th>
+                    <th>Note prelievo / scarto</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for prelievo in prelievi %}
+                    {% if prelievo.quantita_scarto == None and prelievo.tank_id == tank_corrente.id %}
+                    <tr>
+                        <td>{{ prelievo.lotto.articolo.codice }} - {{ prelievo.lotto.articolo.descrizione }}</td>
+                        <td>{{ prelievo.lotto.codice_lotto }}</td>
+                        <td>{{ prelievo.quantita_prelevata }}</td>
+                        <td>{{ prelievo.lotto.articolo.unita_misura }}</td>
+                        <td>
+                            <input type="number" name="scarto_{{ prelievo.pk }}" min="0" max="{{ prelievo.quantita_prelevata }}" step="0.001" value="0" required>
+                        </td>
+                        <td>
+                            <input type="text" name="note_scarto_{{ prelievo.pk }}" value="{{ prelievo.note }}" placeholder="Note su prelievo o scarto">
+                        </td>
+                    </tr>
+                    {% endif %}
+                {% endfor %}
+            </tbody>
+        </table>
+        <div class="form-actions">
+            <button type="submit" class="btn">Registra tutti gli scarti del tank</button>
+        </div>
     </form>
 </div>
 {% endif %}
 
-{% endif %}
-
-
 <div class="card">
 
-    <h3>Prelievi registrati</h3>
+    <h3>Prelievi e scarti registrati</h3>
 
     {% if prelievi %}
 
@@ -239,9 +246,7 @@ Produzione {{ produzione.articolo.codice }} - MIRA
                     <th>Scarto</th>
                     <th>Unità</th>
 
-                    {% if produzione.stato == "BOZZA" %}
-                        <th>Registra scarto</th>
-                    {% endif %}
+                    <th>Note</th>
                 </tr>
 
             </thead>
@@ -293,58 +298,7 @@ Produzione {{ produzione.articolo.codice }} - MIRA
                         <td>
                             {{ prelievo.lotto.articolo.unita_misura }}
                         </td>
-
-
-                        {% if produzione.stato == "BOZZA" %}
-
-                            <td>
-
-                                {% if prelievo.quantita_scarto == None %}
-
-                                    <form method="post">
-
-                                        {% csrf_token %}
-
-                                        <input
-                                            type="hidden"
-                                            name="azione"
-                                            value="registra_scarto"
-                                        >
-
-                                        <input
-                                            type="hidden"
-                                            name="prelievo_id"
-                                            value="{{ prelievo.pk }}"
-                                        >
-
-                                        <input
-                                            type="number"
-                                            name="quantita_scarto"
-                                            min="0"
-                                            max="{{ prelievo.quantita_prelevata }}"
-                                            step="0.001"
-                                            value="0"
-                                            required
-                                        >
-
-                                        <button
-                                            type="submit"
-                                            class="btn"
-                                        >
-                                            Registra
-                                        </button>
-
-                                    </form>
-
-                                {% else %}
-
-                                    Registrato
-
-                                {% endif %}
-
-                            </td>
-
-                        {% endif %}
+                        <td>{{ prelievo.note|default:"—" }}</td>
 
                     </tr>
 
@@ -364,96 +318,21 @@ Produzione {{ produzione.articolo.codice }} - MIRA
 
 </div>
 
+{% if tank_pronto_controlli and produzione.stato == "BOZZA" %}
+<div class="card">
+    <h3>Controlli Tank {{ tank_corrente.numero }}</h3>
+    <p>Registra i controlli dopo aver completato prelievi e scarti.</p>
+    <form method="post">
+        {% csrf_token %}
+        <input type="hidden" name="azione" value="controlla_tank">
+        {{ controllo_tank_form.as_p }}
+        <button type="submit" class="btn">Registra °Brix e pH</button>
+    </form>
+</div>
+{% endif %}
+
 
 {% if produzione.stato == "BOZZA" %}
-
-<div class="card">
-
-    <h3>Aggiungi materiale MOCA o prelievo supplementare</h3>
-
-    <p>
-        Seleziona un ingrediente o materiale previsto dalla ricetta.
-        Il gestionale selezionerà automaticamente i lotti
-        secondo il criterio FEFO/FIFO dell'articolo.
-    </p>
-
-
-    <form method="post">
-
-        {% csrf_token %}
-
-        <input
-            type="hidden"
-            name="azione"
-            value="aggiungi_ingrediente"
-        >
-
-
-        {% if ingrediente_form.non_field_errors %}
-
-            <div class="alert alert-danger">
-                {{ ingrediente_form.non_field_errors }}
-            </div>
-
-        {% endif %}
-
-
-        <div class="form-group">
-            {{ conferma_form.pastorizzazione_completata }}
-            {{ conferma_form.pastorizzazione_completata.label_tag }}
-            {{ conferma_form.pastorizzazione_completata.errors }}
-        </div>
-
-        <div class="form-group">
-            {{ conferma_form.vuoto_controllato }}
-            {{ conferma_form.vuoto_controllato.label_tag }}
-            {{ conferma_form.vuoto_controllato.errors }}
-        </div>
-
-
-        <div class="form-group">
-
-            {{ ingrediente_form.articolo.label_tag }}
-            {{ ingrediente_form.articolo }}
-
-            {% if ingrediente_form.articolo.errors %}
-                <div class="form-error">
-                    {{ ingrediente_form.articolo.errors }}
-                </div>
-            {% endif %}
-
-        </div>
-
-
-        <div class="form-group">
-
-            {{ ingrediente_form.quantita_richiesta.label_tag }}
-            {{ ingrediente_form.quantita_richiesta }}
-
-            {% if ingrediente_form.quantita_richiesta.errors %}
-                <div class="form-error">
-                    {{ ingrediente_form.quantita_richiesta.errors }}
-                </div>
-            {% endif %}
-
-        </div>
-
-
-        <div class="form-actions">
-
-            <button
-                type="submit"
-                class="btn"
-            >
-                Registra prelievo
-            </button>
-
-        </div>
-
-    </form>
-
-</div>
-
 
 <div class="card">
 
@@ -484,6 +363,18 @@ Produzione {{ produzione.articolo.codice }} - MIRA
             </div>
 
         {% endif %}
+
+        <div class="form-group">
+            {{ conferma_form.pastorizzazione_completata }}
+            {{ conferma_form.pastorizzazione_completata.label_tag }}
+            {{ conferma_form.pastorizzazione_completata.errors }}
+        </div>
+
+        <div class="form-group">
+            {{ conferma_form.vuoto_controllato }}
+            {{ conferma_form.vuoto_controllato.label_tag }}
+            {{ conferma_form.vuoto_controllato.errors }}
+        </div>
 
 
         <div class="form-group">

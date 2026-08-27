@@ -32,8 +32,10 @@ from .services import (
     registra_confezionamento,
     registra_consumo,
     registra_inscatolamento,
+    registra_ingredienti_tank,
     registra_prelievi_produzione,
     registra_scarto_prelievo_produzione,
+    registra_scarti_tank,
     registra_controlli_tank,
     registra_trasferimento,
 )
@@ -224,6 +226,18 @@ class EliminazioneProduzioniBozzaTests(TestCase):
             categoria=Articolo.Categoria.PRODOTTO_FINITO,
             unita_misura=Articolo.UnitaMisura.KG,
         )
+        cls.vasetto = Articolo.objects.create(
+            codice="VASO-TEST",
+            descrizione="Vasetto test",
+            categoria=Articolo.Categoria.MOCA,
+            unita_misura=Articolo.UnitaMisura.PZ,
+        )
+        cls.tappo = Articolo.objects.create(
+            codice="TAPPO-TEST",
+            descrizione="Tappo test",
+            categoria=Articolo.Categoria.MOCA,
+            unita_misura=Articolo.UnitaMisura.PZ,
+        )
         cls.semilavorato = Articolo.objects.create(
             codice="SEMI-ANN",
             descrizione="Semilavorato annullamento",
@@ -349,6 +363,18 @@ class ConfermaProduzioneTests(TestCase):
             ubicazione=cls.ubicazione_ingrediente,
             quantita=Decimal("20"),
         )
+        for articolo in (cls.vasetto, cls.tappo):
+            lotto = Lotto.objects.create(
+                articolo=articolo,
+                codice_lotto=f"{articolo.codice}-LOT",
+                tipo=Lotto.Tipo.ACQUISTO,
+                quantita_iniziale=Decimal("10"),
+            )
+            Giacenza.objects.create(
+                lotto=lotto,
+                ubicazione=cls.ubicazione_ingrediente,
+                quantita=Decimal("10"),
+            )
         ricetta = Ricetta.objects.create(
             articolo=cls.prodotto,
             nome="Ricetta test",
@@ -358,6 +384,13 @@ class ConfermaProduzioneTests(TestCase):
             articolo=cls.ingrediente,
             quantita=Decimal("5"),
         )
+        for articolo in (cls.vasetto, cls.tappo):
+            RigaRicetta.objects.create(
+                ricetta=ricetta,
+                articolo=articolo,
+                quantita=Decimal("1"),
+                ingrediente_prodotto=False,
+            )
 
     def test_produzione_non_puo_essere_confermata_due_volte(self):
         produzione = avvia_produzione(self.prodotto)
@@ -400,6 +433,14 @@ class ConfermaProduzioneTests(TestCase):
             produzione_confermata.lotto.fase,
             Lotto.Fase.INVASETTATO,
         )
+        self.assertEqual(
+            Giacenza.objects.get(lotto__articolo=self.vasetto).quantita,
+            Decimal("6"),
+        )
+        self.assertEqual(
+            Giacenza.objects.get(lotto__articolo=self.tappo).quantita,
+            Decimal("6"),
+        )
 
         self.client.force_login(self.user)
         response = self.client.get(
@@ -416,12 +457,36 @@ class ConfermaProduzioneTests(TestCase):
 
     def test_non_apre_un_secondo_tank_prima_dei_controlli(self):
         produzione = avvia_produzione(self.prodotto)
-        tank = apri_tank_produzione(produzione, numero_batch=5)
+        tank = apri_tank_produzione(produzione, numero_batch=8)
 
         self.assertEqual(tank.numero, 1)
-        self.assertEqual(tank.numero_batch, 5)
+        self.assertEqual(tank.numero_batch, 8)
         with self.assertRaisesMessage(ValueError, "tank aperto"):
             apri_tank_produzione(produzione, numero_batch=1)
+
+    def test_registra_tutti_gli_ingredienti_del_tank(self):
+        produzione = avvia_produzione(self.prodotto)
+        tank = apri_tank_produzione(produzione, numero_batch=2)
+
+        prelievi = registra_ingredienti_tank(
+            produzione=produzione,
+            tank=tank,
+            quantita_per_articolo={self.ingrediente.pk: Decimal("10")},
+            note_per_articolo={self.ingrediente.pk: "Correzione operatore"},
+        )
+
+        self.assertTrue(prelievi)
+        self.assertEqual(tank.prelievi.count(), len(prelievi))
+        self.assertTrue(all(p.note == "Correzione operatore" for p in prelievi))
+
+        registrati = registra_scarti_tank(
+            produzione,
+            tank,
+            {prelievo.pk: Decimal("0") for prelievo in prelievi},
+            {prelievo.pk: "Nessuno scarto" for prelievo in prelievi},
+        )
+        self.assertEqual(len(registrati), len(prelievi))
+        self.assertFalse(tank.prelievi.filter(quantita_scarto__isnull=True).exists())
 
 
 class ConfezionamentoInscatolamentoTests(TestCase):

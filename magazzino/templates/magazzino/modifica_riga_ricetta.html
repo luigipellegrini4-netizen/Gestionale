@@ -31,6 +31,10 @@ Modifica ingrediente - {{ ricetta.nome }}
         Modifica i dati dell'ingrediente selezionato.
     </p>
 
+    <div class="message">
+        La quantità indicata deve essere quella prevista per <strong>1 batch</strong>.
+    </div>
+
     <form method="post">
 
         {% csrf_token %}

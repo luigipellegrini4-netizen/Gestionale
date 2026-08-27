@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 from django.contrib import messages
 from django.contrib.auth.decorators import permission_required, user_passes_test
@@ -16,8 +16,6 @@ from .forms import (
     RicettaForm,
     RigaRicettaForm,
     ProduzioneForm,
-    IngredienteProduzioneForm,
-    ScartoProduzioneForm,
     ConfermaProduzioneForm,
     AperturaTankForm,
     ControlloTankForm,
@@ -39,7 +37,8 @@ from .services import (
     registra_consumo,
     avvia_produzione,
     registra_prelievi_produzione,
-    registra_scarto_prelievo_produzione,
+    registra_ingredienti_tank,
+    registra_scarti_tank,
     conferma_produzione,
     apri_tank_produzione,
     registra_controlli_tank,
@@ -209,7 +208,11 @@ def disponibilita_trasferimento(request):
 
 def situazione_magazzino(request):
     articoli = Paginator(
-        Articolo.objects.all().order_by("descrizione"),
+        Articolo.objects.all().order_by(
+            "categoria",
+            "descrizione",
+            "codice",
+        ),
         50,
     ).get_page(request.GET.get("articoli_page"))
     articoli.object_list = list(articoli.object_list)
@@ -237,9 +240,12 @@ def situazione_magazzino(request):
         ).filter(
             quantita__gt=0,
         ).order_by(
-            "lotto__articolo__descrizione",
-            "lotto__codice_lotto",
             "ubicazione__nome",
+            "lotto__articolo__descrizione",
+            "lotto__articolo__codice",
+            "lotto__codice_lotto",
+            "scaffale",
+            "piano",
         ),
         50,
     ).get_page(request.GET.get("giacenze_page"))
@@ -1097,11 +1103,27 @@ def nuova_ricetta(request):
     else:
         form = RicettaForm()
 
+    prodotti_ricetta = [
+        {
+            "id": articolo.pk,
+            "categoria": articolo.categoria,
+            "etichetta": f"{articolo.codice} - {articolo.nome_per_produzione}",
+        }
+        for articolo in Articolo.objects.filter(
+            attivo=True,
+            categoria__in=[
+                Articolo.Categoria.SEMILAVORATO,
+                Articolo.Categoria.PRODOTTO_FINITO,
+            ],
+        ).order_by("codice")
+    ]
+
     return render(
         request,
         "magazzino/nuova_ricetta.html",
         {
             "form": form,
+            "prodotti_ricetta": prodotti_ricetta,
         },
     )
 
@@ -1433,10 +1455,6 @@ def gestione_produzione(request, pk):
         .first()
     )
 
-    ingrediente_form = IngredienteProduzioneForm(
-        produzione=produzione,
-    )
-
     conferma_form = ConfermaProduzioneForm()
     apertura_tank_form = AperturaTankForm()
     controllo_tank_form = ControlloTankForm()
@@ -1477,114 +1495,82 @@ def gestione_produzione(request, pk):
 
     if (
         request.method == "POST"
-        and request.POST.get("azione") == "registra_scarto"
+        and request.POST.get("azione") == "registra_scarti_tank"
     ):
-        prelievo = get_object_or_404(
-            produzione.prelievi,
-            pk=request.POST.get("prelievo_id"),
-        )
-
-        scarto_form = ScartoProduzioneForm(
-            request.POST,
-            prelievo=prelievo,
-        )
-
-        if scarto_form.is_valid():
-            try:
-                registra_scarto_prelievo_produzione(
-                    prelievo=prelievo,
-                    quantita_scarto=scarto_form.cleaned_data[
-                        "quantita_scarto"
-                    ],
-                    note=scarto_form.cleaned_data[
-                        "note"
-                    ],
-                )
-
-            except ValueError as errore:
-                messages.error(
-                    request,
-                    str(errore),
-                )
-
-            else:
-                messages.success(
-                    request,
-                    "Scarto registrato correttamente.",
-                )
-
+        if tank_corrente is None:
+            messages.error(request, "Non c'è un tank aperto.")
         else:
-            messaggi = []
-
-            for errori_campo in scarto_form.errors.values():
-                for errore in errori_campo:
-                    messaggi.append(str(errore))
-
-            messages.error(
-                request,
-                " ".join(messaggi)
-                or "Scarto non valido.",
-            )
-
-        return redirect(
-            "gestione_produzione",
-            pk=produzione.pk,
-        )
+            try:
+                prelievi_da_completare = tank_corrente.prelievi.filter(
+                    quantita_scarto__isnull=True
+                )
+                scarti_per_prelievo = {
+                    prelievo.pk: Decimal(
+                        request.POST[f"scarto_{prelievo.pk}"].strip().replace(",", ".")
+                    )
+                    for prelievo in prelievi_da_completare
+                }
+                note_per_prelievo = {
+                    prelievo.pk: request.POST.get(f"note_scarto_{prelievo.pk}", "").strip()
+                    for prelievo in prelievi_da_completare
+                }
+                registrati = registra_scarti_tank(
+                    produzione,
+                    tank_corrente,
+                    scarti_per_prelievo,
+                    note_per_prelievo,
+                )
+            except (InvalidOperation, KeyError, ValueError) as errore:
+                messages.error(request, str(errore) or "Scarti non validi.")
+            else:
+                messages.success(request, f"Registrati {len(registrati)} scarti del tank.")
+                return redirect("gestione_produzione", pk=produzione.pk)
 
     if (
         request.method == "POST"
-        and request.POST.get("azione") == "aggiungi_ingrediente"
+        and request.POST.get("azione") == "registra_ingredienti_tank"
     ):
-        ingrediente_form = IngredienteProduzioneForm(
-            request.POST,
-            produzione=produzione,
-        )
-
         if produzione.stato != Produzione.Stato.BOZZA:
-            ingrediente_form.add_error(
-                None,
-                "La produzione non è più in bozza.",
-            )
-
-        elif ingrediente_form.is_valid():
-            if tank_corrente is None:
-                ingrediente_form.add_error(None, "Apri un tank prima dei prelievi.")
-                prelievi_creati = None
-            else:
-                prelievi_creati = None
+            messages.error(request, "La produzione non è più in bozza.")
+        elif tank_corrente is None:
+            messages.error(request, "Apri un tank prima dei prelievi.")
+        elif ricetta is None:
+            messages.error(request, "Il prodotto non ha una ricetta attiva.")
+        else:
             try:
-                if tank_corrente is not None:
-                    prelievi_creati = registra_prelievi_produzione(
-                        produzione=produzione,
-                        articolo=ingrediente_form.cleaned_data["articolo"],
-                        quantita_richiesta=ingrediente_form.cleaned_data[
-                            "quantita_richiesta"
-                        ],
-                        note=f"Prelievo per produzione {produzione.pk}",
-                        operatore=request.user,
-                        tank=tank_corrente,
+                quantita_per_articolo = {
+                    riga.articolo_id: Decimal(
+                        request.POST[f"quantita_{riga.articolo_id}"]
+                        .strip()
+                        .replace(",", ".")
                     )
-
-            except ValueError as errore:
-                ingrediente_form.add_error(
-                    None,
-                    str(errore),
+                    for riga in ricetta.righe.filter(
+                        ingrediente_prodotto=True
+                    )
+                }
+                note_per_articolo = {
+                    riga.articolo_id: request.POST.get(
+                        f"note_prelievo_{riga.articolo_id}", ""
+                    ).strip()
+                    for riga in ricetta.righe.filter(ingrediente_prodotto=True)
+                }
+                prelievi_creati = registra_ingredienti_tank(
+                    produzione=produzione,
+                    tank=tank_corrente,
+                    quantita_per_articolo=quantita_per_articolo,
+                    note_per_articolo=note_per_articolo,
+                    note=f"Prelievi Tank {tank_corrente.numero}",
+                    operatore=request.user,
                 )
-
+            except (InvalidOperation, KeyError, ValueError) as errore:
+                messages.error(request, str(errore) or "Quantità non valide.")
             else:
-                if prelievi_creati is None:
-                    pass
-                else:
-                    messages.success(
-                        request,
-                        f"Prelievo registrato correttamente "
-                        f"su {len(prelievi_creati)} lotto/i.",
-                    )
-
-                    return redirect(
-                        "gestione_produzione",
-                        pk=produzione.pk,
-                    )
+                messages.success(
+                    request,
+                    f"Tutti gli ingredienti del tank sono stati prelevati "
+                    f"da {len(prelievi_creati)} lotto/i.",
+                )
+                return redirect("gestione_produzione", pk=produzione.pk)
 
     if (
         request.method == "POST"
@@ -1660,6 +1646,16 @@ def gestione_produzione(request, pk):
     prelievi = produzione.prelievi.all().order_by(
         "id",
     )
+    scarti_tank_mancanti = (
+        tank_corrente.prelievi.filter(quantita_scarto__isnull=True).exists()
+        if tank_corrente is not None
+        else False
+    )
+    tank_pronto_controlli = (
+        tank_corrente is not None
+        and tank_corrente.prelievi.exists()
+        and not scarti_tank_mancanti
+    )
 
     ingredienti_ricetta = []
 
@@ -1671,7 +1667,9 @@ def gestione_produzione(request, pk):
                 "quantita_prevista": riga.quantita * moltiplicatore,
                 "quantita_input": format(riga.quantita * moltiplicatore, "f"),
             }
-            for riga in ricetta.righe.select_related("articolo").all()
+            for riga in ricetta.righe.select_related("articolo").filter(
+                ingrediente_prodotto=True
+            )
         ]
 
     return render(
@@ -1682,7 +1680,8 @@ def gestione_produzione(request, pk):
             "ricetta": ricetta,
             "ingredienti_ricetta": ingredienti_ricetta,
             "prelievi": prelievi,
-            "ingrediente_form": ingrediente_form,
+            "scarti_tank_mancanti": scarti_tank_mancanti,
+            "tank_pronto_controlli": tank_pronto_controlli,
             "conferma_form": conferma_form,
             "tank": produzione.tank.all(),
             "tank_corrente": tank_corrente,

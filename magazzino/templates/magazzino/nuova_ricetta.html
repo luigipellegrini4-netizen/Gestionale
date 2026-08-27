@@ -33,6 +33,15 @@ Nuova ricetta - MIRA
         {{ form.non_field_errors }}
 
         <p>
+            {{ form.tipo_prodotto.label_tag }}
+            {{ form.tipo_prodotto }}
+
+            {% if form.tipo_prodotto.errors %}
+                {{ form.tipo_prodotto.errors }}
+            {% endif %}
+        </p>
+
+        <p>
             {{ form.articolo.label_tag }}
             {{ form.articolo }}
 
@@ -50,14 +59,7 @@ Nuova ricetta - MIRA
             {% endif %}
         </p>
 
-        <p>
-            {{ form.versione.label_tag }}
-            {{ form.versione }}
-
-            {% if form.versione.errors %}
-                {{ form.versione.errors }}
-            {% endif %}
-        </p>
+        <p><strong>Versione:</strong> assegnata automaticamente.</p>
 
         <p>
             {{ form.attiva.label_tag }}
@@ -95,5 +97,32 @@ Nuova ricetta - MIRA
     </form>
 
 </div>
+
+{{ prodotti_ricetta|json_script:"prodotti-ricetta" }}
+<script>
+    document.addEventListener("DOMContentLoaded", function () {
+        const tipo = document.getElementById("id_tipo_prodotto");
+        const prodotto = document.getElementById("id_articolo");
+        const prodotti = JSON.parse(document.getElementById("prodotti-ricetta").textContent);
+        const selezionato = "{{ form.articolo.value|default:''|escapejs }}";
+
+        function aggiornaProdotti() {
+            const valoreCorrente = prodotto.value || selezionato;
+            prodotto.replaceChildren(new Option("Seleziona il prodotto", ""));
+            prodotti
+                .filter(elemento => elemento.categoria === tipo.value)
+                .forEach(elemento => prodotto.add(new Option(
+                    elemento.etichetta,
+                    elemento.id,
+                    false,
+                    String(elemento.id) === String(valoreCorrente)
+                )));
+            prodotto.disabled = !tipo.value;
+        }
+
+        tipo.addEventListener("change", aggiornaProdotti);
+        aggiornaProdotti();
+    });
+</script>
 
 {% endblock %}

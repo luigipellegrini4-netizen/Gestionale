@@ -5,6 +5,7 @@ from django.db import transaction
 from django.db.models import Q
 
 from .models import (
+    Articolo,
     Lotto,
     Giacenza,
     Movimento,
@@ -339,8 +340,8 @@ def apri_tank_produzione(produzione, numero_batch):
     if produzione.tank.filter(gradi_brix__isnull=True).exists():
         raise ValueError("Registra Brix e pH del tank aperto prima di continuarne un altro.")
     numero_batch = int(numero_batch)
-    if not 1 <= numero_batch <= 5:
-        raise ValueError("Un tank deve contenere da 1 a 5 batch.")
+    if numero_batch < 1:
+        raise ValueError("Il numero di batch deve essere almeno 1.")
     ultimo = produzione.tank.order_by("-numero").first()
     return TankProduzione.objects.create(
         produzione=produzione,
@@ -478,6 +479,103 @@ def registra_prelievi_produzione(
         prelievi.append(prelievo)
 
     return prelievi
+
+
+@transaction.atomic
+def registra_ingredienti_tank(
+    produzione,
+    tank,
+    quantita_per_articolo,
+    note_per_articolo=None,
+    note="",
+    operatore=None,
+):
+    note_per_articolo = note_per_articolo or {}
+    produzione = Produzione.objects.select_for_update().get(pk=produzione.pk)
+    tank = TankProduzione.objects.select_for_update().get(pk=tank.pk)
+    if tank.produzione_id != produzione.pk:
+        raise ValueError("Il tank non appartiene alla produzione.")
+    if tank.controllato:
+        raise ValueError("I controlli del tank sono già stati registrati.")
+    if tank.prelievi.exists():
+        raise ValueError("Gli ingredienti di questo tank sono già stati prelevati.")
+
+    ricetta = (
+        produzione.articolo.ricette
+        .filter(attiva=True)
+        .prefetch_related("righe__articolo")
+        .first()
+    )
+    if ricetta is None:
+        raise ValueError("Il prodotto non ha una ricetta attiva.")
+
+    righe = list(
+        ricetta.righe.select_related("articolo").filter(
+            ingrediente_prodotto=True
+        )
+    )
+    mancanti = [
+        riga.articolo.codice
+        for riga in righe
+        if riga.articolo_id not in quantita_per_articolo
+    ]
+    if mancanti:
+        raise ValueError(
+            "Inserisci la quantità per tutti gli ingredienti: "
+            + ", ".join(mancanti)
+            + "."
+        )
+
+    prelievi = []
+    for riga in righe:
+        quantita = Decimal(str(quantita_per_articolo[riga.articolo_id]))
+        if quantita <= 0:
+            raise ValueError(
+                f"La quantità di {riga.articolo.codice} deve essere positiva."
+            )
+        prelievi.extend(
+            registra_prelievi_produzione(
+                produzione=produzione,
+                articolo=riga.articolo,
+                quantita_richiesta=quantita,
+                note=note_per_articolo.get(riga.articolo_id, note),
+                operatore=operatore,
+                tank=tank,
+            )
+        )
+    return prelievi
+
+
+@transaction.atomic
+def registra_scarti_tank(produzione, tank, scarti_per_prelievo, note_per_prelievo=None):
+    note_per_prelievo = note_per_prelievo or {}
+    produzione = Produzione.objects.select_for_update().get(pk=produzione.pk)
+    tank = TankProduzione.objects.select_for_update().get(pk=tank.pk)
+    if tank.produzione_id != produzione.pk:
+        raise ValueError("Il tank non appartiene alla produzione.")
+    if tank.controllato:
+        raise ValueError("I controlli del tank sono già stati registrati.")
+
+    prelievi = list(
+        tank.prelievi.select_for_update().filter(quantita_scarto__isnull=True)
+    )
+    if not prelievi:
+        raise ValueError("Non ci sono scarti da registrare per questo tank.")
+
+    mancanti = [str(prelievo.pk) for prelievo in prelievi if prelievo.pk not in scarti_per_prelievo]
+    if mancanti:
+        raise ValueError("Inserisci lo scarto per tutti i prelievi del tank.")
+
+    registrati = []
+    for prelievo in prelievi:
+        registrati.append(
+            registra_scarto_prelievo_produzione(
+                prelievo=prelievo,
+                quantita_scarto=scarti_per_prelievo[prelievo.pk],
+                note=note_per_prelievo.get(prelievo.pk, ""),
+            )
+        )
+    return registrati
 
 
 @transaction.atomic
@@ -668,7 +766,9 @@ def conferma_produzione(
         )
 
     ingredienti_mancanti = []
-    for riga in ricetta.righe.select_related("articolo").all():
+    for riga in ricetta.righe.select_related("articolo").filter(
+        ingrediente_prodotto=True
+    ):
         if utilizzo_per_articolo.get(riga.articolo_id, Decimal("0")) <= 0:
             ingredienti_mancanti.append(
                 f"{riga.articolo.codice} - {riga.articolo.descrizione}"
@@ -710,6 +810,30 @@ def conferma_produzione(
         raise ValueError(
             "La destinazione deve essere un'ubicazione Packaging."
         )
+
+    materiali_moca = list(
+        ricetta.righe.select_related("articolo").filter(
+            ingrediente_prodotto=False,
+            articolo__categoria=Articolo.Categoria.MOCA,
+        )
+    )
+    for riga in materiali_moca:
+        quantita_moca = quantita_prodotta * riga.quantita
+        prelievi_moca = registra_prelievi_produzione(
+            produzione=produzione,
+            articolo=riga.articolo,
+            quantita_richiesta=quantita_moca,
+            note=(
+                f"Materiale MOCA per {quantita_prodotta} vasetti: "
+                f"{riga.articolo.codice}"
+            ),
+            operatore=operatore,
+        )
+        for prelievo_moca in prelievi_moca:
+            registra_scarto_prelievo_produzione(
+                prelievo=prelievo_moca,
+                quantita_scarto=Decimal("0"),
+            )
 
     codice_lotto = genera_codice_lotto_produzione(
         produzione.articolo,

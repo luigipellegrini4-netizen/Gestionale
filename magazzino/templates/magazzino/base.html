@@ -199,11 +199,22 @@
         <main>
 
             {% if messages %}
+                <div class="system-messages" role="region" aria-label="Messaggi di sistema" aria-live="assertive">
                 {% for message in messages %}
-                    <div class="message {{ message.tags }}">
-                        {{ message }}
+                    <div class="message system-message {{ message.tags }}" role="alert" tabindex="-1">
+                        <div class="system-message-heading">
+                            <strong>
+                                {% if "error" in message.tags %}⚠ ATTENZIONE
+                                {% elif "warning" in message.tags %}⚠ AVVISO
+                                {% elif "success" in message.tags %}✓ OPERAZIONE COMPLETATA
+                                {% else %}ℹ INFORMAZIONE{% endif %}
+                            </strong>
+                            <button type="button" class="system-message-close" aria-label="Chiudi messaggio">×</button>
+                        </div>
+                        <div>{{ message }}</div>
                     </div>
                 {% endfor %}
+                </div>
             {% endif %}
 
             {% block content %}
@@ -215,6 +226,28 @@
 
 
     <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+
+    <script>
+        document.addEventListener("DOMContentLoaded", function () {
+            const messaggi = document.querySelectorAll(".system-message");
+            if (messaggi.length) {
+                messaggi[0].focus();
+            }
+            messaggi.forEach(function (messaggio) {
+                const chiudi = messaggio.querySelector(".system-message-close");
+                chiudi.addEventListener("click", function () {
+                    messaggio.remove();
+                });
+            });
+            if (messaggi.length) {
+                document.addEventListener("click", function () {
+                    document.querySelectorAll(".system-message").forEach(function (messaggio) {
+                        messaggio.remove();
+                    });
+                }, { once: true });
+            }
+        });
+    </script>
 
     <script>
         document.addEventListener("DOMContentLoaded", function () {

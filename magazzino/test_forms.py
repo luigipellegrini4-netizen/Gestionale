@@ -60,9 +60,9 @@ class RicettaFormTests(TestCase):
     def test_non_consente_due_ricette_attive_per_articolo(self):
         form = RicettaForm(
             data={
+                "tipo_prodotto": Articolo.Categoria.PRODOTTO_FINITO,
                 "articolo": self.prodotto.pk,
                 "nome": "Seconda ricetta",
-                "versione": "2",
                 "attiva": "on",
                 "note": "",
             }
@@ -74,14 +74,36 @@ class RicettaFormTests(TestCase):
     def test_consente_una_seconda_versione_non_attiva(self):
         form = RicettaForm(
             data={
+                "tipo_prodotto": Articolo.Categoria.PRODOTTO_FINITO,
                 "articolo": self.prodotto.pk,
                 "nome": "Seconda ricetta",
-                "versione": "2",
                 "note": "",
             }
         )
 
         self.assertTrue(form.is_valid(), form.errors)
+        ricetta = form.save()
+        self.assertEqual(ricetta.versione, "2")
+
+    def test_filtra_i_prodotti_in_base_al_tipo(self):
+        semilavorato = Articolo.objects.create(
+            codice="SL-FORM",
+            descrizione="Semilavorato form",
+            categoria=Articolo.Categoria.SEMILAVORATO,
+            unita_misura=Articolo.UnitaMisura.KG,
+        )
+        form = RicettaForm(
+            data={
+                "tipo_prodotto": Articolo.Categoria.SEMILAVORATO,
+                "articolo": semilavorato.pk,
+                "nome": "Ricetta semilavorato",
+                "attiva": "on",
+                "note": "",
+            }
+        )
+
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertNotIn(self.prodotto, form.fields["articolo"].queryset)
 
     def test_quantita_ingrediente_deve_essere_positiva(self):
         form = RigaRicettaForm(

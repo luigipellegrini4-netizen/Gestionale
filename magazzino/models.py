@@ -436,6 +436,19 @@ class Ricetta(models.Model):
         blank=True,
     )
 
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["articolo", "versione"],
+                name="unica_versione_ricetta_per_articolo",
+            ),
+            models.UniqueConstraint(
+                fields=["articolo"],
+                condition=models.Q(attiva=True),
+                name="unica_ricetta_attiva_per_articolo",
+            ),
+        ]
+
     def __str__(self):
         return f"{self.articolo.codice} - {self.nome} v{self.versione}"
 
@@ -582,8 +595,8 @@ class TankProduzione(models.Model):
                 name="unico_numero_tank_per_produzione",
             ),
             models.CheckConstraint(
-                condition=models.Q(numero_batch__gte=1, numero_batch__lte=5),
-                name="tank_numero_batch_da_uno_a_cinque",
+                condition=models.Q(numero_batch__gte=1),
+                name="tank_numero_batch_positivo",
             ),
             models.CheckConstraint(
                 condition=models.Q(gradi_brix__isnull=True)

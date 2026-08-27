@@ -1,4 +1,5 @@
 from decimal import Decimal
+from datetime import date, timedelta
 
 from django.core.management.base import BaseCommand
 from django.db import transaction
@@ -10,6 +11,7 @@ from magazzino.models import (
     RigaRicetta,
     Ubicazione,
 )
+from magazzino.services import registra_carico_lotto
 
 
 UBICAZIONI = [
@@ -98,6 +100,10 @@ class Command(BaseCommand):
             )
             articoli[codice] = articolo
 
+        Ricetta.objects.filter(
+            articolo=articoli["PF-FRAG-250"],
+            attiva=True,
+        ).exclude(versione="1").update(attiva=False)
         ricetta, _ = Ricetta.objects.update_or_create(
             articolo=articoli["PF-FRAG-250"],
             versione="1",
@@ -112,9 +118,12 @@ class Command(BaseCommand):
             ("MP-ZUCCHERO", "12", True),
             ("MP-LIMONE", "0.20", True),
             ("SL-PECTINA", "0.30", True),
-            ("MOCA-VASO-250", "100", False),
-            ("MOCA-CAPS-63", "100", False),
+            ("MOCA-VASO-250", "1", False),
+            ("MOCA-CAPS-63", "1", False),
         ]
+        ricetta.righe.exclude(
+            articolo__codice__in=[codice for codice, _, _ in righe]
+        ).delete()
         for codice, quantita, entra_nel_prodotto in righe:
             RigaRicetta.objects.update_or_create(
                 ricetta=ricetta,
@@ -126,9 +135,44 @@ class Command(BaseCommand):
                 },
             )
 
+        carichi = [
+            ("MP-FRAGOLA", "LOT-FRAG-001", "FOR-FRUTTA", "250", "Cella stoccaggio MP positiva", "F1", "P1", 30),
+            ("MP-ZUCCHERO", "LOT-ZUC-001", "FOR-ZUCCHERO", "500", "Magazzino stoccaggio MP", "S1", "P1", None),
+            ("MP-LIMONE", "LOT-LIM-001", "FOR-INGREDIENTI", "100", "Cella stoccaggio MP positiva", "F2", "P1", 90),
+            ("SL-PECTINA", "LOT-PEC-001", "FOR-INGREDIENTI", "50", "Cella stoccaggio SL positiva", "S1", "P1", 365),
+            ("MOCA-VASO-250", "LOT-VASO-001", "FOR-VETRO", "2000", "Magazzino MOCA", "V1", "P1", None),
+            ("MOCA-CAPS-63", "LOT-CAPS-001", "FOR-VETRO", "2000", "Magazzino MOCA", "V2", "P1", None),
+            ("ETI-FRAG-250", "LOT-ETI-001", "FOR-PACK", "2000", "Magazzino packaging", "E1", "P1", None),
+            ("SCA-12X250", "LOT-SCA-001", "FOR-PACK", "200", "Magazzino packaging", "S1", "P1", None),
+        ]
+        carichi_creati = 0
+        for articolo_codice, lotto_codice, fornitore_codice, quantita, ubicazione_nome, scaffale, piano, giorni_scadenza in carichi:
+            if articoli[articolo_codice].lotti.filter(
+                codice_lotto=lotto_codice
+            ).exists():
+                continue
+            registra_carico_lotto(
+                articolo=articoli[articolo_codice],
+                codice_lotto=lotto_codice,
+                fornitore=Fornitore.objects.get(codice=fornitore_codice),
+                quantita=Decimal(quantita),
+                ubicazione=Ubicazione.objects.get(nome=ubicazione_nome),
+                scaffale=scaffale,
+                piano=piano,
+                data_arrivo=date.today(),
+                data_scadenza=(
+                    date.today() + timedelta(days=giorni_scadenza)
+                    if giorni_scadenza is not None else None
+                ),
+                causale="Carico dati dimostrativi",
+                note="Dato dimostrativo",
+            )
+            carichi_creati += 1
+
         self.stdout.write(
             self.style.SUCCESS(
                 "Dati demo caricati: 10 ubicazioni, 6 fornitori, "
-                "10 articoli e 1 ricetta Robocubo."
+                "10 articoli e 1 ricetta Robocubo. "
+                f"Nuovi carichi registrati: {carichi_creati}."
             )
         )
