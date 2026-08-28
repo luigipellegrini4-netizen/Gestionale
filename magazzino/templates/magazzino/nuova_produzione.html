@@ -12,9 +12,8 @@ Nuova produzione - MIRA
 
         <p>
             Seleziona il prodotto finito che l'operatore deve realizzare.
-            Il lotto resterà in fase invasettata fino all'etichettatura.
             Le quantità effettivamente utilizzate verranno registrate
-            successivamente durante la lavorazione.
+            durante la fase di preparazione.
         </p>
     </div>
 </div>
@@ -44,6 +43,22 @@ Nuova produzione - MIRA
                 </div>
             {% endif %}
 
+        </div>
+
+
+        <div class="form-group">
+            {{ form.numero_batch_previsti.label_tag }}
+            {{ form.numero_batch_previsti }}
+            {% if form.numero_batch_previsti.help_text %}<small>{{ form.numero_batch_previsti.help_text }}</small>{% endif %}
+            {% if form.numero_batch_previsti.errors %}<div class="form-error">{{ form.numero_batch_previsti.errors }}</div>{% endif %}
+        </div>
+
+
+        <div class="form-group">
+            {{ form.lotto_provvisorio.label_tag }}
+            {{ form.lotto_provvisorio }}
+            {% if form.lotto_provvisorio.help_text %}<small>{{ form.lotto_provvisorio.help_text }}</small>{% endif %}
+            {% if form.lotto_provvisorio.errors %}<div class="form-error">{{ form.lotto_provvisorio.errors }}</div>{% endif %}
         </div>
 
 

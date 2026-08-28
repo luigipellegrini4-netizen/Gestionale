@@ -1,0 +1,39 @@
+{% extends "magazzino/base.html" %}
+
+{% block title %}Apri non conformità - MIRA{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h2>Apri non conformità</h2>
+        <p>{{ lotto.articolo.descrizione }} — lotto {{ lotto.codice_lotto }}</p>
+    </div>
+</div>
+
+<div class="card stock-highlight">
+    <strong>Quantità della singola UDA</strong>
+    <span>
+        {% if lotto.quantita_singola_uda %}
+            {{ lotto.quantita_singola_uda }} {{ lotto.articolo.unita_misura }}
+        {% else %}
+            Non registrata
+        {% endif %}
+    </span>
+</div>
+
+<div class="form-card">
+    {% if form.non_field_errors %}
+        {% for error in form.non_field_errors %}
+            <div class="message error">{{ error }}</div>
+        {% endfor %}
+    {% endif %}
+    <form method="post">
+        {% csrf_token %}
+        {{ form.as_p }}
+        <div class="form-actions">
+            <button type="submit" class="btn btn-danger">Metti in quarantena</button>
+            <a href="{% url 'dettaglio_lotto' lotto.pk %}" class="btn btn-secondary">Annulla</a>
+        </div>
+    </form>
+</div>
+{% endblock %}

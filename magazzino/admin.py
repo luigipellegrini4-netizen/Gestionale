@@ -1,5 +1,22 @@
 from django.contrib import admin
-from .models import Articolo, Ubicazione, Fornitore, Lotto, Giacenza, Movimento
+from .models import (
+    Articolo, Ubicazione, Fornitore, Lotto, Giacenza, Movimento,
+    NonConformitaLotto,
+)
+
+
+@admin.register(NonConformitaLotto)
+class NonConformitaLottoAdmin(admin.ModelAdmin):
+    list_display = (
+        "id", "ambito", "tipo_nc", "lotto", "stato", "numero_uda_quarantena",
+        "data_apertura", "aperta_da", "data_chiusura", "gestita_da",
+    )
+    list_filter = ("stato", "ambito", "tipo_nc", "data_apertura", "data_chiusura")
+    search_fields = (
+        "lotto__codice_lotto", "lotto__articolo__codice",
+        "lotto__articolo__descrizione", "motivo", "decisione",
+    )
+    readonly_fields = ("data_apertura", "data_chiusura")
 
 
 @admin.register(Articolo)
@@ -10,13 +27,11 @@ class ArticoloAdmin(admin.ModelAdmin):
         "categoria",
         "unita_misura",
         "scorta_minima",
-        "criterio_rotazione",
         "attivo",
     )
     list_filter = (
         "categoria",
         "unita_misura",
-        "criterio_rotazione",
         "attivo",
     )
     search_fields = (
@@ -84,6 +99,11 @@ class LottoAdmin(admin.ModelAdmin):
         "data_produzione",
         "data_scadenza",
         "quantita_iniziale",
+        "numero_colli",
+        "unita_acquisto_per_collo",
+        "peso_unita_acquisto",
+        "fattura",
+        "ddt",
     )
     list_filter = (
         "tipo",
@@ -97,6 +117,8 @@ class LottoAdmin(admin.ModelAdmin):
         "fornitore__ragione_sociale",
         "articolo__codice",
         "articolo__descrizione",
+        "fattura",
+        "ddt",
     )
     ordering = (
         "articolo",

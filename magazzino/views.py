@@ -7,6 +7,7 @@ from django.db.models import F, OuterRef, Q, Subquery, Sum
 from django.utils import timezone
 from django.core.paginator import Paginator
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
 from django.http import HttpResponse, JsonResponse
 
 from .forms import (
@@ -19,6 +20,11 @@ from .forms import (
     ConfermaProduzioneForm,
     AperturaTankForm,
     ControlloTankForm,
+    ModificaTankForm,
+    AnnullaTankForm,
+    BatchProduzioneForm,
+    CarrelloProduzioneForm,
+    ChiusuraCarrelloForm,
     ConfezionamentoForm,
     InscatolamentoForm,
     ProduzioneSemilavoratoForm,
@@ -29,6 +35,9 @@ from .forms import (
     UbicazioneForm,
     ImportazioneCSVForm,
     RipristinoBackupForm,
+    AperturaNonConformitaLottoForm,
+    GestioneNonConformitaLottoForm,
+    AperturaNonConformitaGeneraleForm,
 )
 
 from .services import (
@@ -38,10 +47,15 @@ from .services import (
     avvia_produzione,
     registra_prelievi_produzione,
     registra_ingredienti_tank,
+    chiudi_preparazione_produzione,
     registra_scarti_tank,
     conferma_produzione,
     apri_tank_produzione,
     registra_controlli_tank,
+    registra_pastorizzazione,
+    registra_verifica_vuoto,
+    modifica_tank_produzione,
+    annulla_tank_produzione,
     registra_confezionamento,
     registra_inscatolamento,
     registra_prelievi_semilavorato,
@@ -49,6 +63,8 @@ from .services import (
     conferma_produzione_semilavorato,
     elimina_produzione_bozza,
     elimina_produzione_semilavorato_bozza,
+    apri_non_conformita_lotto,
+    gestisci_non_conformita_lotto,
 )
 
 from .models import (
@@ -64,6 +80,10 @@ from .models import (
     Fornitore,
     Ubicazione,
     RegistroOperazione,
+    TankProduzione,
+    BatchProduzione,
+    CarrelloProduzione,
+    NonConformitaLotto,
 )
 
 from .csv_import import genera_template_csv, importa_csv
@@ -83,6 +103,15 @@ def nuovo_carico(request):
                     codice_lotto=form.cleaned_data["codice_lotto"],
                     fornitore=form.cleaned_data["fornitore"],
                     quantita=form.cleaned_data["quantita"],
+                    numero_colli=form.cleaned_data["numero_colli"],
+                    unita_acquisto_per_collo=form.cleaned_data[
+                        "unita_acquisto_per_collo"
+                    ],
+                    peso_unita_acquisto=form.cleaned_data[
+                        "peso_unita_acquisto"
+                    ],
+                    fattura=form.cleaned_data["fattura"],
+                    ddt=form.cleaned_data["ddt"],
                     ubicazione=form.cleaned_data["ubicazione"],
                     scaffale=form.cleaned_data["scaffale"],
                     piano=form.cleaned_data["piano"],
@@ -233,66 +262,31 @@ def situazione_magazzino(request):
             Decimal("0"),
         )
 
-    giacenze = Paginator(
-        Giacenza.objects.select_related(
-            "lotto__articolo",
-            "ubicazione",
-        ).filter(
-            quantita__gt=0,
-        ).order_by(
-            "ubicazione__nome",
-            "lotto__articolo__descrizione",
-            "lotto__articolo__codice",
-            "lotto__codice_lotto",
-            "scaffale",
-            "piano",
-        ),
-        50,
-    ).get_page(request.GET.get("giacenze_page"))
-    giacenze.object_list = list(giacenze.object_list)
+    def raggruppa_per_categoria(elementi, articolo_da_elemento):
+        gruppi = []
+        for elemento in elementi:
+            articolo = articolo_da_elemento(elemento)
+            if not gruppi or gruppi[-1]["codice"] != articolo.categoria:
+                gruppi.append(
+                    {
+                        "codice": articolo.categoria,
+                        "nome": articolo.get_categoria_display(),
+                        "righe": [],
+                    }
+                )
+            gruppi[-1]["righe"].append(elemento)
+        return gruppi
 
-    lotto_ids = {
-        giacenza.lotto_id for giacenza in giacenze.object_list
-    }
-
-    totali_lotto = {
-        riga["lotto_id"]: riga["totale"]
-        for riga in (
-            Giacenza.objects.filter(lotto_id__in=lotto_ids)
-            .values("lotto_id")
-            .annotate(totale=Sum("quantita"))
-        )
-    }
-
-    totali_inscatolati = {
-        riga["lotto_prodotto_id"]: riga["totale"]
-        for riga in (
-            Inscatolamento.objects.filter(lotto_prodotto_id__in=lotto_ids)
-            .values("lotto_prodotto_id")
-            .annotate(totale=Sum("quantita_prodotti"))
-        )
-    }
-
-    for giacenza in giacenze.object_list:
-        lotto = giacenza.lotto
-        giacenza.quantita_totale = totali_lotto.get(
-            lotto.pk,
-            Decimal("0"),
-        )
-        giacenza.quantita_inscatolata = totali_inscatolati.get(
-            lotto.pk,
-            Decimal("0"),
-        )
-        giacenza.quantita_sfusa = (
-            giacenza.quantita_totale - giacenza.quantita_inscatolata
-        )
-
+    gruppi_articoli = raggruppa_per_categoria(
+        articoli.object_list,
+        lambda articolo: articolo,
+    )
     return render(
         request,
         "magazzino/situazione_magazzino.html",
         {
             "articoli": articoli,
-            "giacenze": giacenze,
+            "gruppi_articoli": gruppi_articoli,
         },
     )
 
@@ -322,7 +316,7 @@ def consumo(request):
             else:
                 messages.success(
                     request,
-                    f"Consumo del lotto "
+                    f"Scarico del lotto "
                     f"{movimento.lotto.codice_lotto} "
                     f"registrato correttamente.",
                 )
@@ -400,6 +394,267 @@ def ricerca_lotti(request):
     )
 
 
+@permission_required("magazzino.operare_magazzino", raise_exception=True)
+def apri_non_conformita_generale(request):
+    if request.method == "POST":
+        form = AperturaNonConformitaGeneraleForm(request.POST)
+        if form.is_valid():
+            if form.cleaned_data["lotto"]:
+                try:
+                    non_conformita = apri_non_conformita_lotto(
+                        lotto=form.cleaned_data["lotto"],
+                        giacenza=form.cleaned_data["giacenza"],
+                        numero_uda=form.cleaned_data["numero_uda"],
+                        motivo=form.cleaned_data["motivo"],
+                        note=form.cleaned_data["note_apertura"],
+                        operatore=request.user,
+                        ambito=form.cleaned_data["ambito"],
+                        tipo_nc=form.cleaned_data["tipo_nc"],
+                    )
+                except ValueError as errore:
+                    form.add_error(None, str(errore))
+                    non_conformita = None
+            else:
+                non_conformita = form.save(commit=False)
+                non_conformita.aperta_da = request.user
+                non_conformita.save()
+            if non_conformita is None:
+                return render(
+                    request,
+                    "magazzino/apri_non_conformita_generale.html",
+                    {"form": form},
+                )
+            messages.warning(
+                request,
+                f"Non conformità NC-{non_conformita.pk} aperta correttamente.",
+            )
+            return redirect("registro_non_conformita")
+    else:
+        form = AperturaNonConformitaGeneraleForm()
+    return render(
+        request,
+        "magazzino/apri_non_conformita_generale.html",
+        {"form": form},
+    )
+
+
+@permission_required("magazzino.operare_magazzino", raise_exception=True)
+def ricerca_lotti_non_conformita(request):
+    query = (request.GET.get("q") or "").strip()
+    if len(query) < 2:
+        return JsonResponse({"risultati": []})
+    lotti = (
+        Lotto.objects.select_related("articolo")
+        .filter(giacenze__quantita__gt=0)
+        .filter(
+            Q(codice_lotto__icontains=query)
+            | Q(articolo__codice__icontains=query)
+            | Q(articolo__descrizione__icontains=query)
+        )
+        .annotate(disponibile=Sum("giacenze__quantita"))
+        .order_by("codice_lotto")[:20]
+    )
+    return JsonResponse(
+        {
+            "risultati": [
+                {
+                    "id": lotto.pk,
+                    "label": (
+                        f"{lotto.codice_lotto} — {lotto.articolo.codice} — "
+                        f"{lotto.articolo.descrizione} — disponibile "
+                        f"{lotto.disponibile} {lotto.articolo.unita_misura}"
+                    ),
+                }
+                for lotto in lotti
+            ]
+        }
+    )
+
+
+@permission_required("magazzino.operare_magazzino", raise_exception=True)
+def posizioni_lotto_non_conformita(request):
+    lotto_id = request.GET.get("lotto")
+    if not lotto_id or not lotto_id.isdigit():
+        return JsonResponse({"posizioni": []})
+    giacenze = (
+        Giacenza.objects.select_related("ubicazione", "lotto__articolo")
+        .filter(lotto_id=lotto_id, quantita__gt=0)
+        .order_by("ubicazione__nome", "scaffale", "piano")
+    )
+    return JsonResponse(
+        {
+            "posizioni": [
+                {
+                    "id": giacenza.pk,
+                    "label": str(giacenza),
+                }
+                for giacenza in giacenze
+            ]
+        }
+    )
+
+
+def registro_non_conformita(request):
+    queryset = NonConformitaLotto.objects.select_related(
+        "lotto__articolo", "aperta_da", "gestita_da"
+    )
+    query = (request.GET.get("q") or "").strip()
+    stato = request.GET.get("stato") or ""
+    ambito = request.GET.get("ambito") or ""
+    tipo_nc = request.GET.get("tipo_nc") or ""
+    if query:
+        filtro = Q(motivo__icontains=query) | Q(decisione__icontains=query)
+        if query.isdigit():
+            filtro |= Q(pk=int(query))
+        queryset = queryset.filter(filtro)
+    if stato:
+        queryset = queryset.filter(stato=stato)
+    if ambito:
+        queryset = queryset.filter(ambito=ambito)
+    if tipo_nc:
+        queryset = queryset.filter(tipo_nc=tipo_nc)
+    pagina = Paginator(queryset, 50).get_page(request.GET.get("page"))
+    return render(
+        request,
+        "magazzino/registro_non_conformita.html",
+        {
+            "non_conformita": pagina,
+            "page_obj": pagina,
+            "query": query,
+            "stato": stato,
+            "ambito": ambito,
+            "tipo_nc": tipo_nc,
+            "stati": NonConformitaLotto.Stato.choices,
+            "ambiti": NonConformitaLotto.Ambito.choices,
+            "tipi_nc": NonConformitaLotto.Tipo.choices,
+        },
+    )
+
+
+def dettaglio_non_conformita(request, pk):
+    non_conformita = get_object_or_404(
+        NonConformitaLotto.objects.select_related(
+            "lotto__articolo", "ubicazione_origine", "aperta_da", "gestita_da"
+        ),
+        pk=pk,
+    )
+    return render(
+        request,
+        "magazzino/dettaglio_non_conformita.html",
+        {"non_conformita": non_conformita},
+    )
+
+
+@permission_required("magazzino.operare_magazzino", raise_exception=True)
+def apri_non_conformita(request, pk):
+    lotto = get_object_or_404(
+        Lotto.objects.select_related("articolo", "fornitore"), pk=pk
+    )
+    if request.method == "POST":
+        form = AperturaNonConformitaLottoForm(request.POST, lotto=lotto)
+        if form.is_valid():
+            try:
+                non_conformita = apri_non_conformita_lotto(
+                    lotto=lotto,
+                    giacenza=form.cleaned_data["giacenza"],
+                    numero_uda=form.cleaned_data["numero_uda"],
+                    motivo=form.cleaned_data["motivo"],
+                    note=form.cleaned_data["note"],
+                    operatore=request.user,
+                    ambito=form.cleaned_data["ambito"],
+                    tipo_nc=form.cleaned_data["tipo_nc"],
+                )
+            except ValueError as errore:
+                form.add_error(None, str(errore))
+            else:
+                messages.warning(
+                    request,
+                    f"Non conformità NC-{non_conformita.pk} aperta: "
+                    f"{non_conformita.numero_uda_quarantena} UDA in quarantena.",
+                )
+                return redirect("dettaglio_lotto", pk=lotto.pk)
+    else:
+        form = AperturaNonConformitaLottoForm(lotto=lotto)
+    return render(
+        request,
+        "magazzino/apri_non_conformita.html",
+        {"lotto": lotto, "form": form},
+    )
+
+
+@permission_required("magazzino.gestire_non_conformita", raise_exception=True)
+def gestisci_non_conformita(request, pk):
+    non_conformita = get_object_or_404(
+        NonConformitaLotto.objects.select_related(
+            "lotto__articolo", "ubicazione_origine", "aperta_da", "gestita_da"
+        ),
+        pk=pk,
+    )
+    if non_conformita.stato == NonConformitaLotto.Stato.CHIUSA:
+        messages.info(request, "La non conformità è già stata chiusa.")
+        return redirect("registro_non_conformita")
+    if request.method == "POST":
+        form = GestioneNonConformitaLottoForm(
+            request.POST, non_conformita=non_conformita
+        )
+        if form.is_valid():
+            for campo in (
+                "analisi_cause", "azione_risoluzione", "responsabile_azione",
+                "data_inizio_gestione", "azione_immediata", "scadenza_prevista",
+                "esito_efficacia", "verifica_efficacia", "data_verifica",
+            ):
+                setattr(non_conformita, campo, form.cleaned_data[campo])
+            non_conformita.stato = NonConformitaLotto.Stato.IN_LAVORAZIONE
+            non_conformita.gestita_da = request.user
+            non_conformita.save()
+
+            if request.POST.get("azione") == "salva":
+                messages.success(request, "Lavorazione della NC salvata.")
+                return redirect("registro_non_conformita")
+            if form.cleaned_data["esito_efficacia"] == NonConformitaLotto.EsitoEfficacia.NON_EFFICACE:
+                form.add_error(
+                    "esito_efficacia",
+                    "Una NC con verifica non efficace deve rimanere in lavorazione.",
+                )
+            else:
+                try:
+                    if non_conformita.numero_uda_quarantena:
+                        gestisci_non_conformita_lotto(
+                            non_conformita=non_conformita,
+                            numero_uda_scartate=form.cleaned_data["numero_uda_scartate"],
+                            numero_uda_reintegrate=form.cleaned_data["numero_uda_reintegrate"],
+                            decisione=form.cleaned_data["decisione"],
+                            responsabile=request.user,
+                        )
+                    else:
+                        non_conformita.stato = NonConformitaLotto.Stato.CHIUSA
+                        non_conformita.data_chiusura = timezone.now()
+                        non_conformita.save(update_fields=["stato", "data_chiusura"])
+                except ValueError as errore:
+                    form.add_error(None, str(errore))
+                else:
+                    messages.success(request, "Non conformità chiusa correttamente.")
+                    return redirect("registro_non_conformita")
+    else:
+        form = GestioneNonConformitaLottoForm(
+            non_conformita=non_conformita,
+            initial={
+                campo: getattr(non_conformita, campo)
+                for campo in (
+                    "analisi_cause", "azione_risoluzione", "responsabile_azione",
+                    "data_inizio_gestione", "azione_immediata", "scadenza_prevista",
+                    "esito_efficacia", "verifica_efficacia", "data_verifica",
+                    "numero_uda_scartate", "numero_uda_reintegrate", "decisione",
+                )
+            },
+        )
+    return render(
+        request,
+        "magazzino/gestisci_non_conformita.html",
+        {"non_conformita": non_conformita, "form": form},
+    )
+
+
 def dettaglio_lotto(request, pk):
     lotto = get_object_or_404(
         Lotto.objects.select_related(
@@ -437,6 +692,12 @@ def dettaglio_lotto(request, pk):
             "-id",
         )
     )
+
+    non_conformita = lotto.non_conformita.select_related(
+        "ubicazione_origine",
+        "aperta_da",
+        "gestita_da",
+    ).all()
 
     quantita_totale = sum(
         (
@@ -492,6 +753,7 @@ def dettaglio_lotto(request, pk):
             lotto=lotto,
             stato=Produzione.Stato.CONFERMATA,
         )
+        .prefetch_related("tank")
         .first()
     )
 
@@ -656,12 +918,15 @@ def dettaglio_lotto(request, pk):
             "lotto": lotto,
             "giacenze": giacenze,
             "movimenti": movimenti,
+            "non_conformita": non_conformita,
             "quantita_totale": quantita_totale,
             "quantita_inscatolata": quantita_inscatolata,
             "quantita_sfusa": quantita_sfusa,
             "inscatolamenti": inscatolamenti,
             "tracciabilita_monte": tracciabilita_monte,
             "tracciabilita_valle": tracciabilita_valle,
+            "produzione": produzione,
+            "tank_produzione": produzione.tank.all() if produzione else [],
         },
     )
 
@@ -679,6 +944,7 @@ def elenco_articoli(request):
             "codice",
         )
     )
+
     articoli = Paginator(articoli_queryset, 50).get_page(
         request.GET.get("page")
     )
@@ -727,6 +993,12 @@ def dettaglio_articolo(request, pk):
         Lotto.objects
         .filter(
             articolo=articolo,
+        )
+        .annotate(
+            giacenza_attuale=Sum(
+                "giacenze__quantita",
+                default=Decimal("0"),
+            ),
         )
         .order_by(
             "-data_produzione",
@@ -1023,6 +1295,7 @@ def registro_operazioni(request):
     query = request.GET.get("q", "").strip()
     area = request.GET.get("area", "").strip()
     azione = request.GET.get("azione", "").strip()
+    esito = request.GET.get("esito", "").strip()
     data_dal = request.GET.get("data_dal", "").strip()
     data_al = request.GET.get("data_al", "").strip()
     if query:
@@ -1030,11 +1303,19 @@ def registro_operazioni(request):
             Q(descrizione__icontains=query)
             | Q(utente__username__icontains=query)
             | Q(percorso__icontains=query)
+            | Q(azione__icontains=query)
+            | Q(area__icontains=query)
+            | Q(modello__icontains=query)
+            | Q(record_id__icontains=query)
+            | Q(oggetto__icontains=query)
+            | Q(motivazione__icontains=query)
         )
     if area:
         logs = logs.filter(area=area)
     if azione:
         logs = logs.filter(azione=azione)
+    if esito:
+        logs = logs.filter(esito=esito)
     if data_dal:
         logs = logs.filter(data_ora__date__gte=data_dal)
     if data_al:
@@ -1055,11 +1336,32 @@ def registro_operazioni(request):
             "query": query,
             "area_selezionata": area,
             "azione_selezionata": azione,
+            "esito_selezionato": esito,
+            "esiti": RegistroOperazione.Esito.choices,
             "data_dal": data_dal,
             "data_al": data_al,
             "aree": aree,
             "azioni": azioni,
         },
+    )
+
+
+@user_passes_test(lambda user: user.is_superuser)
+def dettaglio_registro_operazione(request, pk):
+    log = get_object_or_404(RegistroOperazione.objects.select_related("utente"), pk=pk)
+    campi = sorted(set(log.valori_precedenti) | set(log.valori_successivi))
+    confronto = [
+        {
+            "campo": campo,
+            "prima": log.valori_precedenti.get(campo),
+            "dopo": log.valori_successivi.get(campo),
+        }
+        for campo in campi
+    ]
+    return render(
+        request,
+        "magazzino/dettaglio_registro_operazione.html",
+        {"log": log, "confronto": confronto},
     )
 
 
@@ -1398,6 +1700,12 @@ def nuova_produzione(request):
                         ],
                         note=form.cleaned_data["note"],
                     )
+                    produzione.numero_batch_previsti = form.cleaned_data["numero_batch_previsti"]
+                    produzione.lotto_provvisorio = (
+                        form.cleaned_data["lotto_provvisorio"].strip()
+                        or (form.cleaned_data["data_produzione"] + timedelta(days=1)).strftime("%y%m%d")
+                    )
+                    produzione.save(update_fields=["numero_batch_previsti", "lotto_provvisorio"])
 
                 except ValueError as errore:
                     form.add_error(
@@ -1429,6 +1737,47 @@ def nuova_produzione(request):
 
 
 @permission_required("magazzino.operare_magazzino", raise_exception=True)
+def modifica_tank(request, pk):
+    tank = get_object_or_404(TankProduzione.objects.select_related("produzione"), pk=pk)
+    if request.method == "POST":
+        form = ModificaTankForm(request.POST, instance=tank)
+        if form.is_valid():
+            try:
+                modifica_tank_produzione(
+                    tank,
+                    form.cleaned_data["numero_batch"],
+                    form.cleaned_data["gradi_brix"],
+                    form.cleaned_data["ph"],
+                )
+            except ValueError as errore:
+                form.add_error(None, str(errore))
+            else:
+                messages.success(request, f"Tank {tank.numero} modificato correttamente.")
+                return redirect("gestione_produzione", pk=tank.produzione_id)
+    else:
+        form = ModificaTankForm(instance=tank)
+    return render(request, "magazzino/modifica_tank.html", {"tank": tank, "form": form})
+
+
+@permission_required("magazzino.operare_magazzino", raise_exception=True)
+def annulla_tank(request, pk):
+    tank = get_object_or_404(TankProduzione.objects.select_related("produzione"), pk=pk)
+    if request.method == "POST":
+        form = AnnullaTankForm(request.POST)
+        if form.is_valid():
+            try:
+                annulla_tank_produzione(tank, form.cleaned_data["motivo"], request.user)
+            except ValueError as errore:
+                form.add_error(None, str(errore))
+            else:
+                messages.success(request, f"Tank {tank.numero} annullato e conservato nello storico.")
+                return redirect("gestione_produzione", pk=tank.produzione_id)
+    else:
+        form = AnnullaTankForm()
+    return render(request, "magazzino/annulla_tank.html", {"tank": tank, "form": form})
+
+
+@permission_required("magazzino.operare_magazzino", raise_exception=True)
 def gestione_produzione(request, pk):
     produzione = get_object_or_404(
         Produzione.objects
@@ -1455,12 +1804,119 @@ def gestione_produzione(request, pk):
         .first()
     )
 
-    conferma_form = ConfermaProduzioneForm()
+    conferma_form = ConfermaProduzioneForm(initial={"lotto_definitivo": produzione.lotto_provvisorio})
     apertura_tank_form = AperturaTankForm()
     controllo_tank_form = ControlloTankForm()
+    batch_form = BatchProduzioneForm()
+    carrello_form = CarrelloProduzioneForm(produzione=produzione)
+    chiusura_carrello_form = ChiusuraCarrelloForm()
     tank_corrente = produzione.tank.filter(
+        annullato=False,
         gradi_brix__isnull=True,
     ).order_by("numero").first()
+    produzione_url = reverse("gestione_produzione", kwargs={"pk": produzione.pk})
+
+    if request.method == "POST" and request.POST.get("azione") == "chiudi_preparazione":
+        if produzione.fase != Produzione.Fase.PREPARAZIONE:
+            messages.error(request, "La preparazione è già stata chiusa.")
+        elif ricetta is None:
+            messages.error(request, "Il prodotto non ha una ricetta attiva.")
+        else:
+            try:
+                righe = list(ricetta.righe.select_related("articolo").filter(ingrediente_prodotto=True))
+                quantita = {r.articolo_id: Decimal(request.POST[f"quantita_{r.articolo_id}"].replace(",", ".")) for r in righe}
+                note = {r.articolo_id: request.POST.get(f"note_prelievo_{r.articolo_id}", "") for r in righe}
+                chiudi_preparazione_produzione(produzione, quantita, note, request.user)
+            except (KeyError, InvalidOperation, ValueError) as errore:
+                messages.error(request, str(errore) or "Quantità non valide.")
+            else:
+                messages.success(request, "Preparazione chiusa: prelievi e lotti sono stati registrati.")
+        return redirect(f"{produzione_url}#roboqubo")
+
+    if request.method == "POST" and request.POST.get("azione") == "registra_batch":
+        batch_form = BatchProduzioneForm(request.POST)
+        if produzione.fase != Produzione.Fase.ROBOQUBO:
+            batch_form.add_error(None, "La produzione non è nella fase RoboQubo.")
+        elif produzione.batch.count() >= produzione.numero_batch_previsti:
+            batch_form.add_error(None, "Sono già stati registrati tutti i batch previsti.")
+        elif batch_form.is_valid():
+            BatchProduzione.objects.create(
+                produzione=produzione, numero=produzione.batch.count() + 1,
+                registrato_da=request.user, **batch_form.cleaned_data,
+            )
+            messages.success(request, "Batch registrato correttamente.")
+            return redirect(f"{produzione_url}#roboqubo")
+
+    if request.method == "POST" and request.POST.get("azione") == "crea_tank_da_batch":
+        ids = request.POST.getlist("batch_ids")
+        batch_selezionati = produzione.batch.filter(pk__in=ids, tank__isnull=True)
+        if produzione.tank.filter(annullato=False, data_ora_controlli__isnull=True).exists():
+            messages.error(request, "Chiudi il tank aperto registrando pH e °Brix prima di crearne un altro.")
+        elif not ids or batch_selezionati.count() != len(ids):
+            messages.error(request, "Seleziona almeno un batch disponibile.")
+        else:
+            ultimo = produzione.tank.order_by("-numero").first()
+            nuovo_tank = TankProduzione.objects.create(
+                produzione=produzione, numero=(ultimo.numero + 1 if ultimo else 1),
+                numero_batch=batch_selezionati.count(),
+            )
+            batch_selezionati.update(tank=nuovo_tank)
+            messages.success(request, f"Tank {nuovo_tank.numero} creato e collegato ai batch selezionati.")
+        return redirect(f"{produzione_url}#controlli-tank")
+
+    if request.method == "POST" and request.POST.get("azione") == "chiudi_roboqubo":
+        if produzione.batch.count() != produzione.numero_batch_previsti:
+            messages.error(request, "Registra tutti i batch previsti prima di chiudere RoboQubo.")
+        elif produzione.batch.filter(tank__isnull=True).exists():
+            messages.error(request, "Tutti i batch devono essere collegati a un tank.")
+        elif produzione.tank.filter(annullato=False, data_ora_controlli__isnull=True).exists():
+            messages.error(request, "Registra pH e °Brix di tutti i tank.")
+        else:
+            produzione.fase = Produzione.Fase.INVASETTAMENTO
+            produzione.roboqubo_chiuso_il = timezone.now()
+            produzione.save(update_fields=["fase", "roboqubo_chiuso_il"])
+            messages.success(request, "Fase RoboQubo conclusa.")
+        return redirect(f"{produzione_url}#invasettamento")
+
+    if request.method == "POST" and request.POST.get("azione") == "conferma_moca":
+        produzione.moca_igienizzati = True
+        produzione.moca_igienizzati_il = timezone.now()
+        produzione.moca_igienizzati_da = request.user
+        produzione.save(update_fields=["moca_igienizzati", "moca_igienizzati_il", "moca_igienizzati_da"])
+        messages.success(request, "Pulizia e igienizzazione degli imballaggi MOCA registrata.")
+        return redirect("gestione_produzione", pk=produzione.pk)
+
+    if request.method == "POST" and request.POST.get("azione") == "apri_carrello":
+        carrello_form = CarrelloProduzioneForm(request.POST, produzione=produzione)
+        if not produzione.moca_igienizzati:
+            carrello_form.add_error(None, "Conferma prima pulizia e igienizzazione MOCA.")
+        elif carrello_form.is_valid():
+            CarrelloProduzione.objects.create(
+                produzione=produzione, numero=produzione.carrelli.count() + 1,
+                registrato_da=request.user, **carrello_form.cleaned_data,
+            )
+            messages.success(request, "Carrello e seconda pastorizzazione registrati.")
+            return redirect("gestione_produzione", pk=produzione.pk)
+
+    if request.method == "POST" and request.POST.get("azione") == "chiudi_carrello":
+        carrello = get_object_or_404(produzione.carrelli, pk=request.POST.get("carrello_id"), chiuso_il__isnull=True)
+        chiusura_carrello_form = ChiusuraCarrelloForm(request.POST)
+        if chiusura_carrello_form.is_valid():
+            for campo, valore in chiusura_carrello_form.cleaned_data.items():
+                setattr(carrello, campo, valore)
+            carrello.shock_vuoto_registrato_il = timezone.now()
+            carrello.chiuso_il = timezone.now()
+            carrello.save()
+            produzione.pastorizzazione_completata = True
+            produzione.vuoto_controllato = True
+            produzione.data_ora_pastorizzazione = carrello.pastorizzazione_registrata_il
+            produzione.data_ora_verifica_vuoto = carrello.shock_vuoto_registrato_il
+            produzione.save(update_fields=[
+                "pastorizzazione_completata", "vuoto_controllato",
+                "data_ora_pastorizzazione", "data_ora_verifica_vuoto",
+            ])
+            messages.success(request, f"Carrello {carrello.numero} chiuso correttamente.")
+            return redirect("gestione_produzione", pk=produzione.pk)
 
     if request.method == "POST" and request.POST.get("azione") == "apri_tank":
         apertura_tank_form = AperturaTankForm(request.POST)
@@ -1491,7 +1947,25 @@ def gestione_produzione(request, pk):
                 controllo_tank_form.add_error(None, str(errore))
             else:
                 messages.success(request, "Controlli del tank registrati.")
-                return redirect("gestione_produzione", pk=produzione.pk)
+                return redirect(f"{produzione_url}#roboqubo")
+
+    if request.method == "POST" and request.POST.get("azione") == "registra_pastorizzazione":
+        try:
+            registra_pastorizzazione(produzione)
+        except ValueError as errore:
+            messages.error(request, str(errore))
+        else:
+            messages.success(request, "Pastorizzazione registrata con data e ora.")
+        return redirect("gestione_produzione", pk=produzione.pk)
+
+    if request.method == "POST" and request.POST.get("azione") == "registra_verifica_vuoto":
+        try:
+            registra_verifica_vuoto(produzione)
+        except ValueError as errore:
+            messages.error(request, str(errore))
+        else:
+            messages.success(request, "Verifica sottovuoto registrata con data e ora.")
+        return redirect("gestione_produzione", pk=produzione.pk)
 
     if (
         request.method == "POST"
@@ -1587,7 +2061,12 @@ def gestione_produzione(request, pk):
             )
 
         elif conferma_form.is_valid():
-            scarti_mancanti = produzione.prelievi.filter(
+            produzione.lotto_provvisorio = conferma_form.cleaned_data["lotto_definitivo"].strip()
+            produzione.save(update_fields=["lotto_provvisorio"])
+            prelievi_validi = produzione.prelievi.filter(
+                Q(tank__isnull=True) | Q(tank__annullato=False)
+            )
+            scarti_mancanti = prelievi_validi.filter(
                 quantita_scarto__isnull=True,
             ).exists()
 
@@ -1598,7 +2077,7 @@ def gestione_produzione(request, pk):
                     "lo scarto di tutti i prelievi.",
                 )
 
-            elif not produzione.prelievi.exists():
+            elif not prelievi_validi.exists():
                 conferma_form.add_error(
                     None,
                     "Non è possibile confermare una produzione "
@@ -1612,16 +2091,13 @@ def gestione_produzione(request, pk):
                         quantita_prodotta=conferma_form.cleaned_data[
                             "quantita_prodotta"
                         ],
+                        quantita_ottenuta_kg=conferma_form.cleaned_data[
+                            "quantita_ottenuta_kg"
+                        ],
                         note=conferma_form.cleaned_data[
                             "note"
                         ],
                         operatore=request.user,
-                        pastorizzazione_completata=conferma_form.cleaned_data[
-                            "pastorizzazione_completata"
-                        ],
-                        vuoto_controllato=conferma_form.cleaned_data[
-                            "vuoto_controllato"
-                        ],
                     )
 
                 except ValueError as errore:
@@ -1658,9 +2134,14 @@ def gestione_produzione(request, pk):
     )
 
     ingredienti_ricetta = []
+    contenitore_formato = None
 
     if ricetta is not None:
-        moltiplicatore = tank_corrente.numero_batch if tank_corrente else 1
+        moltiplicatore = (
+            produzione.numero_batch_previsti
+            if produzione.fase == Produzione.Fase.PREPARAZIONE
+            else (tank_corrente.numero_batch if tank_corrente else 1)
+        )
         ingredienti_ricetta = [
             {
                 "riga": riga,
@@ -1671,6 +2152,21 @@ def gestione_produzione(request, pk):
                 ingrediente_prodotto=True
             )
         ]
+        contenitore_formato = next(
+            (
+                riga.articolo
+                for riga in ricetta.righe.select_related("articolo").filter(
+                    ingrediente_prodotto=False,
+                    articolo__categoria=Articolo.Categoria.MOCA,
+                    articolo__formato__isnull=False,
+                    articolo__unita_formato__in=[
+                        Articolo.UnitaFormato.G,
+                        Articolo.UnitaFormato.KG,
+                    ],
+                ).order_by("id")
+            ),
+            None,
+        )
 
     return render(
         request,
@@ -1687,8 +2183,116 @@ def gestione_produzione(request, pk):
             "tank_corrente": tank_corrente,
             "apertura_tank_form": apertura_tank_form,
             "controllo_tank_form": controllo_tank_form,
+            "batch_form": batch_form,
+            "carrello_form": carrello_form,
+            "chiusura_carrello_form": chiusura_carrello_form,
+            "batch_non_assegnati": produzione.batch.filter(tank__isnull=True),
+            "batch_registrati": produzione.batch.select_related("tank").all(),
+            "carrelli": produzione.carrelli.all(),
+            "contenitore_formato": contenitore_formato,
+            "formato_contenitore_kg": (
+                format(contenitore_formato.formato_kg, "f")
+                if contenitore_formato is not None
+                else ""
+            ),
         },
     )
+
+
+@permission_required("magazzino.operare_magazzino", raise_exception=True)
+def invasettamento_produzione(request, pk):
+    produzione = get_object_or_404(
+        Produzione.objects.select_related("articolo", "lotto", "moca_igienizzati_da")
+        .prefetch_related("tank__batch", "carrelli__tank"), pk=pk,
+    )
+    carrello_form = CarrelloProduzioneForm(produzione=produzione)
+    chiusura_form = ChiusuraCarrelloForm()
+    conferma_form = ConfermaProduzioneForm(
+        initial={"lotto_definitivo": produzione.lotto_provvisorio},
+    )
+    url = reverse("invasettamento_produzione", kwargs={"pk": produzione.pk})
+
+    if request.method == "POST" and request.POST.get("azione") == "conferma_moca":
+        produzione.moca_igienizzati = True
+        produzione.moca_igienizzati_il = timezone.now()
+        produzione.moca_igienizzati_da = request.user
+        produzione.save(update_fields=["moca_igienizzati", "moca_igienizzati_il", "moca_igienizzati_da"])
+        messages.success(request, "Igienizzazione MOCA registrata. Ora apri il primo carrello.")
+        return redirect(f"{url}#nuovo-carrello")
+
+    if request.method == "POST" and request.POST.get("azione") == "apri_carrello":
+        carrello_form = CarrelloProduzioneForm(request.POST, produzione=produzione)
+        if not produzione.moca_igienizzati:
+            carrello_form.add_error(None, "Conferma prima pulizia e igienizzazione MOCA.")
+        elif carrello_form.is_valid():
+            CarrelloProduzione.objects.create(
+                produzione=produzione, numero=produzione.carrelli.count() + 1,
+                registrato_da=request.user, **carrello_form.cleaned_data,
+            )
+            messages.success(request, "Pastorizzazione registrata. Completa shock termico e vuoto.")
+            return redirect(f"{url}#carrello-aperto")
+
+    if request.method == "POST" and request.POST.get("azione") == "chiudi_carrello":
+        carrello = get_object_or_404(
+            produzione.carrelli, pk=request.POST.get("carrello_id"), chiuso_il__isnull=True,
+        )
+        chiusura_form = ChiusuraCarrelloForm(request.POST)
+        if chiusura_form.is_valid():
+            for campo, valore in chiusura_form.cleaned_data.items():
+                setattr(carrello, campo, valore)
+            carrello.shock_vuoto_registrato_il = timezone.now()
+            carrello.chiuso_il = timezone.now()
+            carrello.save()
+            produzione.pastorizzazione_completata = True
+            produzione.vuoto_controllato = True
+            produzione.data_ora_pastorizzazione = carrello.pastorizzazione_registrata_il
+            produzione.data_ora_verifica_vuoto = carrello.shock_vuoto_registrato_il
+            produzione.save(update_fields=[
+                "pastorizzazione_completata", "vuoto_controllato",
+                "data_ora_pastorizzazione", "data_ora_verifica_vuoto",
+            ])
+            messages.success(request, f"Carrello {carrello.numero} chiuso. Puoi aprire il successivo.")
+            return redirect(f"{url}#nuovo-carrello")
+
+    if request.method == "POST" and request.POST.get("azione") == "conferma_produzione":
+        conferma_form = ConfermaProduzioneForm(request.POST)
+        if produzione.stato != Produzione.Stato.BOZZA:
+            conferma_form.add_error(None, "La produzione è già stata confermata.")
+        elif produzione.fase != Produzione.Fase.INVASETTAMENTO:
+            conferma_form.add_error(None, "Concludi prima la fase RoboQubo.")
+        elif conferma_form.is_valid():
+            produzione.lotto_provvisorio = conferma_form.cleaned_data["lotto_definitivo"].strip()
+            produzione.save(update_fields=["lotto_provvisorio"])
+            try:
+                produzione = conferma_produzione(
+                    produzione=produzione,
+                    quantita_prodotta=conferma_form.cleaned_data["quantita_prodotta"],
+                    quantita_ottenuta_kg=conferma_form.cleaned_data["quantita_ottenuta_kg"],
+                    note=conferma_form.cleaned_data["note"],
+                    operatore=request.user,
+                )
+            except ValueError as errore:
+                conferma_form.add_error(None, str(errore))
+            else:
+                messages.success(
+                    request,
+                    f"Produzione confermata e lotto {produzione.lotto.codice_lotto} creato.",
+                )
+                return redirect(f"{url}#produzione-conclusa")
+
+    return render(request, "magazzino/invasettamento_produzione.html", {
+        "produzione": produzione,
+        "tank_disponibili": produzione.tank.filter(
+            annullato=False,
+            data_ora_controlli__isnull=False,
+            carrelli__isnull=True,
+        ).order_by("numero"),
+        "carrelli": produzione.carrelli.all(),
+        "carrelli_aperti": produzione.carrelli.filter(chiuso_il__isnull=True).exists(),
+        "carrello_form": carrello_form,
+        "chiusura_carrello_form": chiusura_form,
+        "conferma_form": conferma_form,
+    })
 
 
 @permission_required("magazzino.operare_magazzino", raise_exception=True)

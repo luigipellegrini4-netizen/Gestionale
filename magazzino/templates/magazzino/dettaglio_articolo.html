@@ -73,22 +73,23 @@
         {% if articolo.quantita_per_confezione %}
 
             <div>
-                <strong>Quantità per confezione</strong>
+                <strong>Unità per confezione di acquisto</strong>
                 {{ articolo.quantita_per_confezione }}
-                {{ articolo.unita_misura }}
             </div>
 
+        {% endif %}
+
+        {% if articolo.formato %}
+            <div>
+                <strong>Formato del singolo articolo</strong>
+                {{ articolo.formato }} {{ articolo.get_unita_formato_display }}
+            </div>
         {% endif %}
 
         <div>
             <strong>Scorta minima</strong>
             {{ articolo.scorta_minima }}
             {{ articolo.unita_misura }}
-        </div>
-
-        <div>
-            <strong>Criterio rotazione</strong>
-            {{ articolo.get_criterio_rotazione_display }}
         </div>
 
         <div>
@@ -248,6 +249,7 @@
                         <th>Data produzione</th>
                         <th>Scadenza</th>
                         <th>Quantità iniziale</th>
+                        <th>Giacenza attuale</th>
                     </tr>
 
                 </thead>
@@ -302,6 +304,11 @@
 
                             <td>
                                 {{ lotto.quantita_iniziale }}
+                                {{ articolo.unita_misura }}
+                            </td>
+
+                            <td>
+                                <strong>{{ lotto.giacenza_attuale }}</strong>
                                 {{ articolo.unita_misura }}
                             </td>
 

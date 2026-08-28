@@ -1,0 +1,19 @@
+{% extends "magazzino/base.html" %}
+{% block title %}NC-{{ non_conformita.pk }} - MIRA{% endblock %}
+{% block content %}
+<div class="page-header"><div><h2>Non conformità NC-{{ non_conformita.pk }}</h2><p>{{ non_conformita.get_stato_display }}</p></div>
+{% if non_conformita.stato != "CHIUSA" and perms.magazzino.gestire_non_conformita %}<a class="btn" href="{% url 'gestisci_non_conformita' non_conformita.pk %}">Gestisci</a>{% endif %}</div>
+<div class="card"><h3>Segnalazione</h3><div class="detail-grid">
+<div><strong>Data apertura</strong>{{ non_conformita.data_apertura|date:"d/m/Y H:i" }}</div><div><strong>Segnalante</strong>{{ non_conformita.aperta_da.get_username }}</div>
+<div><strong>Ambito</strong>{{ non_conformita.get_ambito_display }}</div><div><strong>Tipo NC</strong>{{ non_conformita.get_tipo_nc_display }}</div>
+<div><strong>Lotto</strong>{% if non_conformita.lotto %}<a href="{% url 'dettaglio_lotto' non_conformita.lotto.pk %}">{{ non_conformita.lotto.codice_lotto }}</a>{% else %}—{% endif %}</div>
+</div><p><strong>Descrizione NC</strong><br>{{ non_conformita.motivo }}</p><p><strong>Trattamento immediato</strong><br>{{ non_conformita.note_apertura|default:"—" }}</p></div>
+<div class="card"><h3>Lavorazione e chiusura</h3><div class="detail-grid">
+<div><strong>Analisi delle cause</strong>{{ non_conformita.analisi_cause|default:"—" }}</div><div><strong>Azione intrapresa</strong>{{ non_conformita.azione_risoluzione|default:"—" }}</div>
+<div><strong>Responsabilità</strong>{{ non_conformita.responsabile_azione|default:"—" }}</div><div><strong>Data inizio gestione AC</strong>{{ non_conformita.data_inizio_gestione|date:"d/m/Y"|default:"—" }}</div>
+<div><strong>Tempi previsti</strong>{% if non_conformita.azione_immediata %}Immediata{% elif non_conformita.scadenza_prevista %}Entro il {{ non_conformita.scadenza_prevista|date:"d/m/Y" }}{% else %}—{% endif %}</div>
+<div><strong>Data chiusura</strong>{{ non_conformita.data_chiusura|date:"d/m/Y H:i"|default:"—" }}</div>
+<div><strong>Verifica efficacia</strong>{{ non_conformita.get_esito_efficacia_display|default:"—" }}</div><div><strong>Data verifica</strong>{{ non_conformita.data_verifica|date:"d/m/Y"|default:"—" }}</div>
+</div><p><strong>Descrizione verifica</strong><br>{{ non_conformita.verifica_efficacia|default:"—" }}</p></div>
+<a class="btn btn-secondary" href="{% url 'registro_non_conformita' %}">Registro NC</a>
+{% endblock %}

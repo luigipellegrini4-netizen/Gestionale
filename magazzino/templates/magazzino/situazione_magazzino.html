@@ -10,7 +10,7 @@ Situazione magazzino - MIRA
     <div>
         <h2>Situazione magazzino</h2>
         <p>
-            Giacenze complessive per articolo e dettaglio per lotto e ubicazione.
+            Giacenze complessive per articolo. Seleziona un articolo per consultarne i lotti.
         </p>
     </div>
     {% if perms.magazzino.operare_magazzino %}
@@ -21,6 +21,9 @@ Situazione magazzino - MIRA
             <a href="{% url 'trasferimento' %}" class="btn">
                 Trasferimento
             </a>
+            <a href="{% url 'consumo' %}" class="btn">
+                Scarico materiale
+            </a>
         </div>
     {% endif %}
 </div>
@@ -28,9 +31,15 @@ Situazione magazzino - MIRA
 
 <h3>Giacenza complessiva per articolo</h3>
 
-<div class="table-container">
-
-    {% if articoli %}
+{% if articoli %}
+    <div class="category-groups">
+    {% for gruppo in gruppi_articoli %}
+        <section class="category-group">
+            <div class="category-group-header">
+                <h4>{{ gruppo.nome }}</h4>
+                <span>{{ gruppo.righe|length }} articol{{ gruppo.righe|length|pluralize:"o,i" }}</span>
+            </div>
+            <div class="table-container">
 
         <table>
 
@@ -38,7 +47,6 @@ Situazione magazzino - MIRA
                 <tr>
                     <th>Codice</th>
                     <th>Articolo</th>
-                    <th>Categoria</th>
                     <th>Giacenza complessiva</th>
                     <th>Unità</th>
                 </tr>
@@ -46,7 +54,7 @@ Situazione magazzino - MIRA
 
             <tbody>
 
-                {% for articolo in articoli %}
+                {% for articolo in gruppo.righe %}
 
                     <tr>
 
@@ -57,11 +65,9 @@ Situazione magazzino - MIRA
                         </td>
 
                         <td>
-                            {{ articolo.descrizione }}
-                        </td>
-
-                        <td>
-                            {{ articolo.get_categoria_display }}
+                            <a href="{% url 'dettaglio_articolo' articolo.pk %}">
+                                <strong>{{ articolo.descrizione }}</strong>
+                            </a>
                         </td>
 
                         <td>
@@ -82,135 +88,26 @@ Situazione magazzino - MIRA
 
         </table>
 
-    {% else %}
+            </div>
+        </section>
+    {% endfor %}
+    </div>
+{% else %}
 
         <p>
             Non ci sono articoli presenti in anagrafica.
         </p>
 
-    {% endif %}
-
-</div>
+{% endif %}
 
 {% if articoli.paginator.num_pages > 1 %}
     <nav class="pagination" aria-label="Pagine articoli">
         {% if articoli.has_previous %}
-            <a href="?articoli_page={{ articoli.previous_page_number }}&giacenze_page={{ giacenze.number }}">Precedente</a>
+            <a href="?articoli_page={{ articoli.previous_page_number }}">Precedente</a>
         {% endif %}
         <span>Pagina {{ articoli.number }} di {{ articoli.paginator.num_pages }}</span>
         {% if articoli.has_next %}
-            <a href="?articoli_page={{ articoli.next_page_number }}&giacenze_page={{ giacenze.number }}">Successiva</a>
-        {% endif %}
-    </nav>
-{% endif %}
-
-<h3>Dettaglio giacenze per lotto</h3>
-
-<div class="table-container">
-
-    {% if giacenze %}
-
-        <table>
-
-            <thead>
-                <tr>
-                    <th>Articolo</th>
-                    <th>Lotto</th>
-                    <th>Ubicazione</th>
-                    <th>Quantità</th>
-                    <th>Unità</th>
-                    <th>Totale lotto</th>
-                    <th>Inscatolati</th>
-                    <th>Sfusi</th>
-                </tr>
-            </thead>
-
-            <tbody>
-
-                {% for giacenza in giacenze %}
-
-                    <tr>
-
-                        <td>
-                            {{ giacenza.lotto.articolo.descrizione }}
-                        </td>
-
-                        <td>
-                            <a href="{% url 'dettaglio_lotto' giacenza.lotto.pk %}">
-                                {{ giacenza.lotto.codice_lotto }}
-                            </a>
-                        </td>
-
-                        <td>
-                            {{ giacenza.ubicazione.nome }}
-                            {% if giacenza.scaffale or giacenza.piano %}
-                                <br><small>
-                                    {% if giacenza.scaffale %}Scaffale {{ giacenza.scaffale }}{% endif %}
-                                    {% if giacenza.piano %} · Piano {{ giacenza.piano }}{% endif %}
-                                </small>
-                            {% endif %}
-                        </td>
-
-                        <td>
-                            <strong>
-                                {{ giacenza.quantita }}
-                            </strong>
-                        </td>
-
-                        <td>
-                            {{ giacenza.lotto.articolo.unita_misura }}
-                        </td>
-
-                        {% if giacenza.lotto.articolo.categoria == "PRODOTTO_FINITO" %}
-
-                            <td>
-                                <strong>
-                                    {{ giacenza.quantita_totale }}
-                                </strong>
-                            </td>
-
-                            <td>
-                                {{ giacenza.quantita_inscatolata }}
-                            </td>
-
-                            <td>
-                                {{ giacenza.quantita_sfusa }}
-                            </td>
-
-                        {% else %}
-
-                            <td>—</td>
-                            <td>—</td>
-                            <td>—</td>
-
-                        {% endif %}
-
-                    </tr>
-
-                {% endfor %}
-
-            </tbody>
-
-        </table>
-
-    {% else %}
-
-        <p>
-            Non ci sono giacenze disponibili.
-        </p>
-
-    {% endif %}
-
-</div>
-
-{% if giacenze.paginator.num_pages > 1 %}
-    <nav class="pagination" aria-label="Pagine giacenze">
-        {% if giacenze.has_previous %}
-            <a href="?articoli_page={{ articoli.number }}&giacenze_page={{ giacenze.previous_page_number }}">Precedente</a>
-        {% endif %}
-        <span>Pagina {{ giacenze.number }} di {{ giacenze.paginator.num_pages }}</span>
-        {% if giacenze.has_next %}
-            <a href="?articoli_page={{ articoli.number }}&giacenze_page={{ giacenze.next_page_number }}">Successiva</a>
+            <a href="?articoli_page={{ articoli.next_page_number }}">Successiva</a>
         {% endif %}
     </nav>
 {% endif %}

@@ -5,6 +5,36 @@ from . import views
 
 urlpatterns = [
     path(
+        "non-conformita/nuova/",
+        views.apri_non_conformita_generale,
+        name="apri_non_conformita_generale",
+    ),
+    path(
+        "non-conformita/ricerca-lotti/",
+        views.ricerca_lotti_non_conformita,
+        name="ricerca_lotti_non_conformita",
+    ),
+    path(
+        "non-conformita/posizioni-lotto/",
+        views.posizioni_lotto_non_conformita,
+        name="posizioni_lotto_non_conformita",
+    ),
+    path(
+        "non-conformita/",
+        views.registro_non_conformita,
+        name="registro_non_conformita",
+    ),
+    path(
+        "non-conformita/<int:pk>/",
+        views.dettaglio_non_conformita,
+        name="dettaglio_non_conformita",
+    ),
+    path(
+        "amministrazione/registro-operazioni/<int:pk>/",
+        views.dettaglio_registro_operazione,
+        name="dettaglio_registro_operazione",
+    ),
+    path(
         "", 
         views.home,
         name="home",
@@ -54,6 +84,16 @@ urlpatterns = [
         "lotti/<int:pk>/",
         views.dettaglio_lotto,
         name="dettaglio_lotto",
+    ),
+    path(
+        "lotti/<int:pk>/non-conformita/nuova/",
+        views.apri_non_conformita,
+        name="apri_non_conformita",
+    ),
+    path(
+        "non-conformita/<int:pk>/gestisci/",
+        views.gestisci_non_conformita,
+        name="gestisci_non_conformita",
     ),
 
     path(
@@ -119,9 +159,24 @@ urlpatterns = [
         name="gestione_produzione",
     ),
     path(
+        "produzione/<int:pk>/invasettamento/",
+        views.invasettamento_produzione,
+        name="invasettamento_produzione",
+    ),
+    path(
         "produzione/<int:pk>/elimina/",
         views.elimina_produzione,
         name="elimina_produzione",
+    ),
+    path(
+        "produzione/tank/<int:pk>/modifica/",
+        views.modifica_tank,
+        name="modifica_tank",
+    ),
+    path(
+        "produzione/tank/<int:pk>/annulla/",
+        views.annulla_tank,
+        name="annulla_tank",
     ),
 
     path(

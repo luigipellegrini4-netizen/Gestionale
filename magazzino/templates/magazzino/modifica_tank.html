@@ -1,0 +1,15 @@
+{% extends "magazzino/base.html" %}
+{% block title %}Modifica Tank {{ tank.numero }} - MIRA{% endblock %}
+{% block content %}
+<div class="page-header"><div><h2>Modifica Tank {{ tank.numero }}</h2><p>Produzione {{ tank.produzione.articolo.codice }}</p></div></div>
+<div class="form-card">
+    <form method="post">
+        {% csrf_token %}
+        {{ form.as_p }}
+        <div class="form-actions">
+            <button type="submit" class="btn">Salva modifiche</button>
+            <a href="{% url 'gestione_produzione' tank.produzione_id %}" class="btn btn-secondary">Annulla</a>
+        </div>
+    </form>
+</div>
+{% endblock %}

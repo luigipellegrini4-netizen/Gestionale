@@ -1,0 +1,16 @@
+{% extends "magazzino/base.html" %}
+{% block title %}Annulla Tank {{ tank.numero }} - MIRA{% endblock %}
+{% block content %}
+<div class="page-header"><div><h2>Annulla Tank {{ tank.numero }}</h2><p>Il tank resterà registrato nello storico della produzione.</p></div></div>
+<div class="form-card">
+    <div class="message warning">I prelievi effettuati non verranno restituiti al magazzino: resteranno associati al tank non conforme.</div>
+    <form method="post">
+        {% csrf_token %}
+        {{ form.as_p }}
+        <div class="form-actions">
+            <button type="submit" class="btn btn-danger">Conferma annullamento tank</button>
+            <a href="{% url 'gestione_produzione' tank.produzione_id %}" class="btn btn-secondary">Torna alla produzione</a>
+        </div>
+    </form>
+</div>
+{% endblock %}

@@ -28,7 +28,8 @@ CONFIGURAZIONI_CSV = {
     "articoli": {
         "headers": [
             "codice", "descrizione", "nome_produzione", "categoria", "unita_misura",
-            "quantita_per_confezione", "scorta_minima", "criterio_rotazione",
+            "quantita_per_confezione", "formato", "unita_formato",
+            "scorta_minima",
             "tipo_packaging",
             "pezzi_per_imballo", "attivo",
             "note",
@@ -102,6 +103,7 @@ def importa_csv(tipo, contenuto):
             dati["quantita_per_confezione"] = dati[
                 "quantita_per_confezione"
             ].replace(",", ".")
+            dati["formato"] = dati["formato"].replace(",", ".")
             dati["scorta_minima"] = dati["scorta_minima"].replace(",", ".")
 
         esistente = configurazione["model"].objects.filter(

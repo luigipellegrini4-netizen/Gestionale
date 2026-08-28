@@ -1,15 +1,18 @@
 {% extends "magazzino/base.html" %}
 
 {% block title %}
-Consumo - MIRA
+Scarico materiale - MIRA
 {% endblock %}
 
 {% block content %}
 
 <div class="page-header">
     <div>
-        <h2>Consumo materia prima</h2>
-        <p>Registra il consumo di una quantità da un lotto presente in magazzino.</p>
+        <h2>Scarico materiale di consumo</h2>
+        <p>
+            Registra lo scarico di guanti, carta, detergenti e altri materiali
+            consumati che non entrano direttamente nel prodotto.
+        </p>
     </div>
 </div>
 
@@ -31,7 +34,7 @@ Consumo - MIRA
         <div class="form-actions">
 
             <button type="submit" class="btn">
-                Registra consumo
+                Registra scarico
             </button>
 
             <a href="{% url 'situazione_magazzino' %}" class="btn btn-secondary">

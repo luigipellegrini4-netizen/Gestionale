@@ -1,0 +1,37 @@
+{% extends "magazzino/base.html" %}
+{% block title %}Dettaglio operazione - MIRA{% endblock %}
+{% block content %}
+<div class="page-header"><div><h2>Dettaglio operazione</h2><p>Codice {{ log.codice_operazione }}</p></div></div>
+<div class="card">
+    <div class="detail-grid">
+        <div><strong>Data e ora</strong>{{ log.data_ora|date:"d/m/Y H:i:s" }}</div>
+        <div><strong>Utente</strong>{% if log.utente %}{{ log.utente.username }}{% else %}Sistema / storico{% endif %}</div>
+        <div><strong>Area</strong>{{ log.area|default:"—" }}</div>
+        <div><strong>Operazione</strong>{{ log.azione }}</div>
+        <div><strong>Esito</strong>{{ log.get_esito_display }}</div>
+        <div><strong>Oggetto</strong>{{ log.oggetto|default:"—" }}</div>
+        <div><strong>Modello</strong>{{ log.modello|default:"—" }}</div>
+        <div><strong>ID record</strong>{{ log.record_id|default:"—" }}</div>
+        <div><strong>Metodo e percorso</strong>{{ log.metodo }} {{ log.percorso }}</div>
+        <div><strong>Indirizzo IP</strong>{{ log.indirizzo_ip|default:"—" }}</div>
+        <div><strong>Browser/dispositivo</strong>{{ log.user_agent|default:"—" }}</div>
+    </div>
+    <h3>Descrizione</h3><p>{{ log.descrizione }}</p>
+    {% if log.motivazione %}<h3>Motivazione</h3><p>{{ log.motivazione }}</p>{% endif %}
+    {% if log.errore %}<div class="alert-danger"><strong>Errore</strong><br>{{ log.errore }}</div>{% endif %}
+</div>
+<div class="card">
+    <h3>Confronto dei valori</h3>
+    <div class="table-container"><table>
+        <thead><tr><th>Campo</th><th>Prima</th><th>Dopo</th></tr></thead>
+        <tbody>
+            {% for riga in confronto %}
+            <tr><td>{{ riga.campo }}</td><td>{{ riga.prima|default_if_none:"—" }}</td><td>{{ riga.dopo|default_if_none:"—" }}</td></tr>
+            {% empty %}<tr><td colspan="3">Nessuna fotografia precedente disponibile.</td></tr>{% endfor %}
+        </tbody>
+    </table></div>
+    <h3>Dettagli richiesta</h3>
+    <table><tbody>{% for campo, valore in log.dettagli.items %}<tr><th>{{ campo }}</th><td>{{ valore }}</td></tr>{% empty %}<tr><td>Nessun dettaglio.</td></tr>{% endfor %}</tbody></table>
+</div>
+<a href="{% url 'registro_operazioni' %}" class="btn btn-secondary">Torna al registro</a>
+{% endblock %}

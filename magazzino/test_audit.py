@@ -45,6 +45,8 @@ class RegistroOperazioniTests(TestCase):
         self.assertEqual(log.dettagli["codice"], "FOR-AUDIT")
         self.assertEqual(log.indirizzo_ip, "127.0.0.1")
         self.assertIsNotNone(log.data_ora)
+        self.assertEqual(log.esito, RegistroOperazione.Esito.RIUSCITA)
+        self.assertIsNotNone(log.codice_operazione)
 
     def test_registro_e_visibile_solo_al_superuser(self):
         self.client.force_login(self.operatore)
@@ -55,3 +57,31 @@ class RegistroOperazioniTests(TestCase):
         response = self.client.get(reverse("registro_operazioni"))
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Registro operazioni")
+
+    def test_modifica_salva_valori_prima_e_dopo_ed_e_ricercabile(self):
+        fornitore = Fornitore.objects.create(
+            codice="FOR-STORICO",
+            ragione_sociale="Nome precedente",
+        )
+        self.client.force_login(self.operatore)
+        response = self.client.post(
+            reverse("modifica_fornitore", args=[fornitore.pk]),
+            {
+                "codice": fornitore.codice,
+                "ragione_sociale": "Nome successivo",
+                "attivo": "on",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        log = RegistroOperazione.objects.get(azione="Modifica fornitore")
+        self.assertEqual(log.modello, "magazzino.fornitore")
+        self.assertEqual(log.record_id, str(fornitore.pk))
+        self.assertEqual(log.valori_precedenti["ragione_sociale"], "Nome precedente")
+        self.assertEqual(log.valori_successivi["ragione_sociale"], "Nome successivo")
+
+        self.client.force_login(self.superuser)
+        ricerca = self.client.get(reverse("registro_operazioni"), {"q": "Nome successivo"})
+        self.assertContains(ricerca, "Nome successivo")
+        dettaglio = self.client.get(reverse("dettaglio_registro_operazione", args=[log.pk]))
+        self.assertContains(dettaglio, "Nome precedente")
+        self.assertContains(dettaglio, "Nome successivo")

@@ -1,14 +1,16 @@
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from datetime import date
 
 from django.db import transaction
 from django.db.models import Q
+from django.utils import timezone
 
 from .models import (
     Articolo,
     Lotto,
     Giacenza,
     Movimento,
+    NonConformitaLotto,
     Ubicazione,
     Produzione,
     TankProduzione,
@@ -69,6 +71,11 @@ def registra_carico_lotto(
     fornitore,
     quantita,
     ubicazione,
+    numero_colli=None,
+    unita_acquisto_per_collo=None,
+    peso_unita_acquisto=None,
+    fattura="",
+    ddt="",
     scaffale="",
     piano="",
     data_arrivo=None,
@@ -78,8 +85,78 @@ def registra_carico_lotto(
     operatore=None,
 ):
     quantita = Decimal(str(quantita))
+    fattura = (fattura or "").strip()
+    ddt = (ddt or "").strip()
     if quantita <= 0:
         raise ValueError("La quantità deve essere maggiore di zero.")
+    if not fattura and not ddt:
+        raise ValueError("Inserire almeno una Fattura oppure un DDT.")
+    if numero_colli is not None:
+        numero_colli = int(numero_colli)
+        if numero_colli <= 0:
+            raise ValueError("Il numero di colli deve essere maggiore di zero.")
+    if unita_acquisto_per_collo is not None:
+        unita_acquisto_per_collo = int(unita_acquisto_per_collo)
+        if unita_acquisto_per_collo <= 0:
+            raise ValueError(
+                "Le unità di acquisto per collo devono essere maggiori di zero."
+            )
+    if peso_unita_acquisto is not None:
+        peso_unita_acquisto = Decimal(str(peso_unita_acquisto))
+        if peso_unita_acquisto <= 0:
+            raise ValueError(
+                "Il peso della singola unità di acquisto deve essere maggiore di zero."
+            )
+
+    valori_presenti = sum(
+        valore is not None
+        for valore in (
+            numero_colli,
+            unita_acquisto_per_collo,
+            peso_unita_acquisto,
+        )
+    )
+    if valori_presenti < 2:
+        raise ValueError(
+            "Indicare almeno due valori tra numero di colli, numero di unità "
+            "di acquisto per collo e peso della singola UDA."
+        )
+    if valori_presenti == 2:
+        if numero_colli is None:
+            valore = quantita / (
+                Decimal(unita_acquisto_per_collo) * peso_unita_acquisto
+            )
+            intero = valore.to_integral_value()
+            if valore != intero:
+                raise ValueError(
+                    "Il numero di colli calcolato non è un numero intero."
+                )
+            numero_colli = int(intero)
+        elif unita_acquisto_per_collo is None:
+            valore = quantita / (Decimal(numero_colli) * peso_unita_acquisto)
+            intero = valore.to_integral_value()
+            if valore != intero:
+                raise ValueError(
+                    "Il numero di unità di acquisto per collo calcolato non è "
+                    "un numero intero."
+                )
+            unita_acquisto_per_collo = int(intero)
+        else:
+            peso_unita_acquisto = (
+                quantita
+                / (Decimal(numero_colli) * Decimal(unita_acquisto_per_collo))
+            ).quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)
+    else:
+        quantita_calcolata = (
+            Decimal(numero_colli)
+            * Decimal(unita_acquisto_per_collo)
+            * peso_unita_acquisto
+        )
+        if abs(quantita_calcolata - quantita) > Decimal("0.000001"):
+            raise ValueError(
+                "I dati di colli e unità di acquisto non sono coerenti con "
+                "la quantità totale."
+            )
     if not articolo.attivo:
         raise ValueError("L'articolo non è attivo.")
     if fornitore is not None and not fornitore.attivo:
@@ -102,6 +179,11 @@ def registra_carico_lotto(
         data_arrivo=data_arrivo,
         data_scadenza=data_scadenza,
         quantita_iniziale=quantita,
+        fattura=fattura,
+        ddt=ddt,
+        numero_colli=numero_colli,
+        unita_acquisto_per_collo=unita_acquisto_per_collo,
+        peso_unita_acquisto=peso_unita_acquisto,
         note=note,
     )
     movimento = registra_carico(
@@ -205,7 +287,7 @@ def registra_consumo(
     ubicazione_origine,
     scaffale_origine="",
     piano_origine="",
-    causale="Consumo",
+    causale="Scarico materiale di consumo",
     note="",
     operatore=None,
 ):
@@ -244,6 +326,171 @@ def registra_consumo(
         eseguito_da=operatore,
     )
     return movimento
+
+
+@transaction.atomic
+def apri_non_conformita_lotto(
+    lotto,
+    giacenza,
+    numero_uda,
+    motivo,
+    note="",
+    operatore=None,
+    ambito=NonConformitaLotto.Ambito.PRODUZIONE,
+    tipo_nc=NonConformitaLotto.Tipo.INTERNO,
+):
+    numero_uda = int(numero_uda)
+    if numero_uda <= 0:
+        raise ValueError("Il numero di UDA deve essere maggiore di zero.")
+    if operatore is None:
+        raise ValueError("L'operatore che apre la non conformità è obbligatorio.")
+    if not (motivo or "").strip():
+        raise ValueError("Il motivo della non conformità è obbligatorio.")
+    if lotto.quantita_singola_uda is None or lotto.quantita_singola_uda <= 0:
+        raise ValueError(
+            "Il lotto non ha la quantità della singola UDA registrata."
+        )
+
+    giacenza = (
+        Giacenza.objects.select_for_update()
+        .select_related("ubicazione")
+        .filter(pk=giacenza.pk, lotto=lotto)
+        .first()
+    )
+    if giacenza is None:
+        raise ValueError("La posizione selezionata non appartiene al lotto.")
+
+    quantita_per_uda = Decimal(lotto.quantita_singola_uda)
+    quantita_quarantena = Decimal(numero_uda) * quantita_per_uda
+    if giacenza.quantita < quantita_quarantena:
+        raise ValueError(
+            "Le UDA richieste superano la giacenza disponibile nella posizione."
+        )
+
+    giacenza.quantita -= quantita_quarantena
+    giacenza.save(update_fields=["quantita"])
+    non_conformita = NonConformitaLotto.objects.create(
+        lotto=lotto,
+        ubicazione_origine=giacenza.ubicazione,
+        scaffale_origine=giacenza.scaffale,
+        piano_origine=giacenza.piano,
+        numero_uda_quarantena=numero_uda,
+        quantita_quarantena=quantita_quarantena,
+        quantita_per_uda=quantita_per_uda,
+        motivo=motivo.strip(),
+        note_apertura=(note or "").strip(),
+        aperta_da=operatore,
+        ambito=ambito,
+        tipo_nc=tipo_nc,
+    )
+    Movimento.objects.create(
+        tipo=Movimento.Tipo.QUARANTENA,
+        lotto=lotto,
+        quantita=quantita_quarantena,
+        ubicazione_origine=giacenza.ubicazione,
+        scaffale_origine=giacenza.scaffale,
+        piano_origine=giacenza.piano,
+        causale=f"Apertura non conformità NC-{non_conformita.pk}",
+        note=motivo.strip(),
+        eseguito_da=operatore,
+    )
+    return non_conformita
+
+
+@transaction.atomic
+def gestisci_non_conformita_lotto(
+    non_conformita,
+    numero_uda_scartate,
+    numero_uda_reintegrate,
+    decisione,
+    responsabile=None,
+):
+    non_conformita = (
+        NonConformitaLotto.objects.select_for_update()
+        .select_related("lotto", "ubicazione_origine")
+        .get(pk=non_conformita.pk)
+    )
+    if non_conformita.stato == NonConformitaLotto.Stato.CHIUSA:
+        raise ValueError("La non conformità è già stata chiusa.")
+    if responsabile is None:
+        raise ValueError("Il responsabile qualità è obbligatorio.")
+    if not (decisione or "").strip():
+        raise ValueError("La motivazione della decisione è obbligatoria.")
+
+    scartate = int(numero_uda_scartate)
+    reintegrate = int(numero_uda_reintegrate)
+    if scartate < 0 or reintegrate < 0:
+        raise ValueError("Le quantità di UDA non possono essere negative.")
+    if scartate + reintegrate != non_conformita.numero_uda_quarantena:
+        raise ValueError(
+            "La somma delle UDA scartate e reintegrate deve coincidere con "
+            "le UDA in quarantena."
+        )
+
+    lotto = non_conformita.lotto
+    quantita_reintegrata = Decimal(reintegrate) * non_conformita.quantita_per_uda
+    quantita_scartata = Decimal(scartate) * non_conformita.quantita_per_uda
+
+    if reintegrate:
+        giacenza = (
+            Giacenza.objects.select_for_update()
+            .filter(
+                lotto=lotto,
+                ubicazione=non_conformita.ubicazione_origine,
+                scaffale=non_conformita.scaffale_origine,
+                piano=non_conformita.piano_origine,
+            )
+            .first()
+        )
+        if giacenza is None:
+            giacenza = Giacenza.objects.create(
+                lotto=lotto,
+                ubicazione=non_conformita.ubicazione_origine,
+                scaffale=non_conformita.scaffale_origine,
+                piano=non_conformita.piano_origine,
+                quantita=Decimal("0"),
+            )
+        giacenza.quantita += quantita_reintegrata
+        giacenza.save(update_fields=["quantita"])
+        Movimento.objects.create(
+            tipo=Movimento.Tipo.REINTEGRO,
+            lotto=lotto,
+            quantita=quantita_reintegrata,
+            ubicazione_destinazione=non_conformita.ubicazione_origine,
+            scaffale_destinazione=non_conformita.scaffale_origine,
+            piano_destinazione=non_conformita.piano_origine,
+            causale=f"Reintegro non conformità NC-{non_conformita.pk}",
+            note=decisione.strip(),
+            eseguito_da=responsabile,
+        )
+
+    if scartate:
+        Movimento.objects.create(
+            tipo=Movimento.Tipo.SCARTO_NC,
+            lotto=lotto,
+            quantita=quantita_scartata,
+            causale=f"Scarto non conformità NC-{non_conformita.pk}",
+            note=decisione.strip(),
+            eseguito_da=responsabile,
+        )
+
+    non_conformita.stato = NonConformitaLotto.Stato.CHIUSA
+    non_conformita.numero_uda_scartate = scartate
+    non_conformita.numero_uda_reintegrate = reintegrate
+    non_conformita.decisione = decisione.strip()
+    non_conformita.gestita_da = responsabile
+    non_conformita.data_chiusura = timezone.now()
+    non_conformita.save(
+        update_fields=[
+            "stato",
+            "numero_uda_scartate",
+            "numero_uda_reintegrate",
+            "decisione",
+            "gestita_da",
+            "data_chiusura",
+        ]
+    )
+    return non_conformita
 
 
 def genera_codice_lotto_produzione(articolo, data_produzione):
@@ -337,7 +584,7 @@ def apri_tank_produzione(produzione, numero_batch):
     produzione = Produzione.objects.select_for_update().get(pk=produzione.pk)
     if produzione.stato != Produzione.Stato.BOZZA:
         raise ValueError("La produzione non è in bozza.")
-    if produzione.tank.filter(gradi_brix__isnull=True).exists():
+    if produzione.tank.filter(annullato=False, gradi_brix__isnull=True).exists():
         raise ValueError("Registra Brix e pH del tank aperto prima di continuarne un altro.")
     numero_batch = int(numero_batch)
     if numero_batch < 1:
@@ -353,20 +600,90 @@ def apri_tank_produzione(produzione, numero_batch):
 @transaction.atomic
 def registra_controlli_tank(tank, gradi_brix, ph):
     tank = TankProduzione.objects.select_for_update().get(pk=tank.pk)
+    if tank.annullato:
+        raise ValueError("Il tank è stato annullato.")
     if tank.controllato:
         raise ValueError("I controlli di questo tank sono già registrati.")
-    if not tank.prelievi.exists():
-        raise ValueError("Registra i prelievi del tank prima dei controlli.")
-    if tank.prelievi.filter(quantita_scarto__isnull=True).exists():
-        raise ValueError("Registra tutti gli scarti del tank prima dei controlli.")
     gradi_brix = Decimal(str(gradi_brix))
     ph = Decimal(str(ph))
     if gradi_brix < 0 or ph < 0 or ph > 14:
         raise ValueError("Valori Brix o pH non validi.")
     tank.gradi_brix = gradi_brix
     tank.ph = ph
-    tank.save(update_fields=["gradi_brix", "ph"])
+    tank.data_ora_controlli = timezone.now()
+    tank.chiuso_il = tank.data_ora_controlli
+    tank.save(update_fields=["gradi_brix", "ph", "data_ora_controlli", "chiuso_il"])
     return tank
+
+
+@transaction.atomic
+def modifica_tank_produzione(tank, numero_batch, gradi_brix=None, ph=None):
+    tank = TankProduzione.objects.select_related("produzione").select_for_update().get(pk=tank.pk)
+    if tank.annullato:
+        raise ValueError("Un tank annullato non può essere modificato.")
+    if tank.produzione.stato != Produzione.Stato.BOZZA:
+        raise ValueError("È possibile modificare il tank solo con produzione in bozza.")
+    numero_batch = int(numero_batch)
+    if numero_batch < 1:
+        raise ValueError("Il numero di batch deve essere almeno 1.")
+    if (gradi_brix is None) != (ph is None):
+        raise ValueError("Gradi Brix e pH devono essere compilati insieme.")
+    if gradi_brix is not None and not tank.prelievi.exists():
+        raise ValueError("Registra i prelievi del tank prima dei controlli.")
+    if gradi_brix is not None and tank.prelievi.filter(quantita_scarto__isnull=True).exists():
+        raise ValueError("Registra tutti gli scarti del tank prima dei controlli.")
+    tank.numero_batch = numero_batch
+    tank.gradi_brix = Decimal(str(gradi_brix)) if gradi_brix is not None else None
+    tank.ph = Decimal(str(ph)) if ph is not None else None
+    if tank.gradi_brix is not None and (tank.gradi_brix < 0 or tank.ph < 0 or tank.ph > 14):
+        raise ValueError("Valori Brix o pH non validi.")
+    tank.data_ora_controlli = timezone.now() if tank.gradi_brix is not None else None
+    tank.save(update_fields=["numero_batch", "gradi_brix", "ph", "data_ora_controlli"])
+    return tank
+
+
+@transaction.atomic
+def annulla_tank_produzione(tank, motivo, operatore=None):
+    tank = TankProduzione.objects.select_related("produzione").select_for_update().get(pk=tank.pk)
+    if tank.annullato:
+        raise ValueError("Il tank è già stato annullato.")
+    if tank.produzione.stato != Produzione.Stato.BOZZA:
+        raise ValueError("È possibile annullare il tank solo con produzione in bozza.")
+    motivo = (motivo or "").strip()
+    if len(motivo) < 3:
+        raise ValueError("Inserisci il motivo dell'annullamento.")
+    tank.annullato = True
+    tank.motivo_annullamento = motivo
+    tank.data_ora_annullamento = timezone.now()
+    tank.annullato_da = operatore
+    tank.save(update_fields=["annullato", "motivo_annullamento", "data_ora_annullamento", "annullato_da"])
+    return tank
+
+
+@transaction.atomic
+def registra_pastorizzazione(produzione):
+    produzione = Produzione.objects.select_for_update().get(pk=produzione.pk)
+    if produzione.stato != Produzione.Stato.BOZZA:
+        raise ValueError("La produzione non è in bozza.")
+    if produzione.pastorizzazione_completata:
+        raise ValueError("La pastorizzazione è già stata registrata.")
+    produzione.pastorizzazione_completata = True
+    produzione.data_ora_pastorizzazione = timezone.now()
+    produzione.save(update_fields=["pastorizzazione_completata", "data_ora_pastorizzazione"])
+    return produzione
+
+
+@transaction.atomic
+def registra_verifica_vuoto(produzione):
+    produzione = Produzione.objects.select_for_update().get(pk=produzione.pk)
+    if produzione.stato != Produzione.Stato.BOZZA:
+        raise ValueError("La produzione non è in bozza.")
+    if produzione.vuoto_controllato:
+        raise ValueError("La verifica sottovuoto è già stata registrata.")
+    produzione.vuoto_controllato = True
+    produzione.data_ora_verifica_vuoto = timezone.now()
+    produzione.save(update_fields=["vuoto_controllato", "data_ora_verifica_vuoto"])
+    return produzione
 
 
 @transaction.atomic
@@ -495,6 +812,8 @@ def registra_ingredienti_tank(
     tank = TankProduzione.objects.select_for_update().get(pk=tank.pk)
     if tank.produzione_id != produzione.pk:
         raise ValueError("Il tank non appartiene alla produzione.")
+    if tank.annullato:
+        raise ValueError("Il tank è stato annullato.")
     if tank.controllato:
         raise ValueError("I controlli del tank sono già stati registrati.")
     if tank.prelievi.exists():
@@ -547,12 +866,42 @@ def registra_ingredienti_tank(
 
 
 @transaction.atomic
+def chiudi_preparazione_produzione(produzione, quantita_per_articolo, note_per_articolo=None, operatore=None):
+    note_per_articolo = note_per_articolo or {}
+    produzione = Produzione.objects.select_for_update().get(pk=produzione.pk)
+    if produzione.fase != Produzione.Fase.PREPARAZIONE:
+        raise ValueError("La preparazione è già stata chiusa.")
+    ricetta = produzione.articolo.ricette.filter(attiva=True).prefetch_related("righe__articolo").first()
+    if ricetta is None:
+        raise ValueError("Il prodotto non ha una ricetta attiva.")
+    righe = list(ricetta.righe.select_related("articolo").filter(ingrediente_prodotto=True))
+    if any(r.articolo_id not in quantita_per_articolo for r in righe):
+        raise ValueError("Inserisci la quantità di tutti gli ingredienti.")
+    creati = []
+    for riga in righe:
+        creati_riga = registra_prelievi_produzione(
+            produzione, riga.articolo, quantita_per_articolo[riga.articolo_id],
+            note_per_articolo.get(riga.articolo_id, ""), operatore,
+        )
+        for prelievo in creati_riga:
+            prelievo.quantita_scarto = Decimal("0")
+            prelievo.save(update_fields=["quantita_scarto"])
+        creati.extend(creati_riga)
+    produzione.fase = Produzione.Fase.ROBOQUBO
+    produzione.preparazione_chiusa_il = timezone.now()
+    produzione.save(update_fields=["fase", "preparazione_chiusa_il"])
+    return creati
+
+
+@transaction.atomic
 def registra_scarti_tank(produzione, tank, scarti_per_prelievo, note_per_prelievo=None):
     note_per_prelievo = note_per_prelievo or {}
     produzione = Produzione.objects.select_for_update().get(pk=produzione.pk)
     tank = TankProduzione.objects.select_for_update().get(pk=tank.pk)
     if tank.produzione_id != produzione.pk:
         raise ValueError("Il tank non appartiene alla produzione.")
+    if tank.annullato:
+        raise ValueError("Il tank è stato annullato.")
     if tank.controllato:
         raise ValueError("I controlli del tank sono già stati registrati.")
 
@@ -678,6 +1027,7 @@ def registra_scarto_prelievo_produzione(
 def conferma_produzione(
     produzione,
     quantita_prodotta,
+    quantita_ottenuta_kg=None,
     ubicazione_destinazione=None,
     note="",
     operatore=None,
@@ -701,32 +1051,53 @@ def conferma_produzione(
             "La produzione ha già un lotto associato."
         )
 
-    if not produzione.tank.exists():
+    if not produzione.tank.filter(annullato=False).exists():
         raise ValueError("Non è stato registrato alcun tank.")
 
-    if produzione.tank.filter(
+    if produzione.tank.filter(annullato=False).filter(
         Q(gradi_brix__isnull=True) | Q(ph__isnull=True)
     ).exists():
         raise ValueError("Completa i controlli Brix e pH di tutti i tank.")
 
-    if not pastorizzazione_completata:
+    if produzione.fase == Produzione.Fase.INVASETTAMENTO:
+        if not produzione.moca_igienizzati:
+            raise ValueError("Conferma pulizia e igienizzazione degli imballaggi MOCA.")
+        if not produzione.carrelli.exists():
+            raise ValueError("Registra almeno un carrello di invasettamento.")
+        if produzione.carrelli.filter(chiuso_il__isnull=True).exists():
+            raise ValueError("Chiudi tutti i carrelli prima di confermare la produzione.")
+
+    if pastorizzazione_completata and not produzione.pastorizzazione_completata:
+        produzione.pastorizzazione_completata = True
+        produzione.data_ora_pastorizzazione = timezone.now()
+    if vuoto_controllato and not produzione.vuoto_controllato:
+        produzione.vuoto_controllato = True
+        produzione.data_ora_verifica_vuoto = timezone.now()
+
+    if not produzione.pastorizzazione_completata:
         raise ValueError("Conferma il completamento della pastorizzazione.")
-    if not vuoto_controllato:
+    if not produzione.vuoto_controllato:
         raise ValueError("Conferma il controllo del vuoto.")
 
     quantita_prodotta = Decimal(str(quantita_prodotta))
+    quantita_ottenuta_kg = Decimal(
+        str(quantita_ottenuta_kg if quantita_ottenuta_kg is not None else quantita_prodotta)
+    )
 
     if quantita_prodotta <= 0:
         raise ValueError(
             "La quantità prodotta deve essere maggiore di zero."
         )
 
-    if not produzione.prelievi.exists():
+    prelievi_validi = produzione.prelievi.filter(
+        Q(tank__isnull=True) | Q(tank__annullato=False)
+    )
+    if not prelievi_validi.exists():
         raise ValueError(
             "Non sono stati registrati prelievi per questa produzione."
         )
 
-    scarti_mancanti = produzione.prelievi.filter(
+    scarti_mancanti = prelievi_validi.filter(
         quantita_scarto__isnull=True,
     ).exists()
 
@@ -750,7 +1121,7 @@ def conferma_produzione(
         )
 
     prelievi = list(
-        produzione.prelievi.select_related("lotto__articolo")
+        prelievi_validi.select_related("lotto__articolo")
     )
 
     utilizzo_per_articolo = {}
@@ -810,6 +1181,8 @@ def conferma_produzione(
         raise ValueError(
             "La destinazione deve essere un'ubicazione Packaging."
         )
+    if quantita_ottenuta_kg <= 0:
+        raise ValueError("La quantità effettiva ottenuta deve essere maggiore di zero.")
 
     materiali_moca = list(
         ricetta.righe.select_related("articolo").filter(
@@ -835,10 +1208,11 @@ def conferma_produzione(
                 quantita_scarto=Decimal("0"),
             )
 
-    codice_lotto = genera_codice_lotto_produzione(
-        produzione.articolo,
-        produzione.data_produzione,
+    codice_lotto = (produzione.lotto_provvisorio or "").strip() or genera_codice_lotto_produzione(
+        produzione.articolo, produzione.data_produzione,
     )
+    if Lotto.objects.filter(articolo=produzione.articolo, codice_lotto=codice_lotto).exists():
+        raise ValueError("Il numero lotto indicato è già utilizzato per questo articolo.")
 
     lotto = Lotto.objects.create(
         articolo=produzione.articolo,
@@ -869,10 +1243,10 @@ def conferma_produzione(
 
     produzione.lotto = lotto
     produzione.quantita_prodotta = quantita_prodotta
+    produzione.quantita_ottenuta_kg = quantita_ottenuta_kg
+    produzione.fase = Produzione.Fase.COMPLETATA
     produzione.ubicazione_destinazione = ubicazione_destinazione
     produzione.stato = Produzione.Stato.CONFERMATA
-    produzione.pastorizzazione_completata = True
-    produzione.vuoto_controllato = True
 
     if note:
         produzione.note = note
@@ -881,10 +1255,14 @@ def conferma_produzione(
         update_fields=[
             "lotto",
             "quantita_prodotta",
+            "quantita_ottenuta_kg",
+            "fase",
             "ubicazione_destinazione",
             "stato",
             "pastorizzazione_completata",
             "vuoto_controllato",
+            "data_ora_pastorizzazione",
+            "data_ora_verifica_vuoto",
             "note",
         ]
     )
@@ -1361,37 +1739,17 @@ def proponi_prelievi_articolo(
         )
     )
 
-    if articolo.criterio_rotazione == articolo.CriterioRotazione.FEFO:
-        giacenze.sort(
-            key=lambda g: (
-                g.lotto.data_scadenza is None,
-                g.lotto.data_scadenza or date.max,
-                g.lotto.data_arrivo
-                or g.lotto.data_produzione
-                or date.max,
-                g.lotto.id,
-                g.ubicazione.id,
-            )
+    giacenze.sort(
+        key=lambda g: (
+            g.lotto.data_scadenza is None,
+            g.lotto.data_scadenza or date.max,
+            g.lotto.data_arrivo
+            or g.lotto.data_produzione
+            or date.max,
+            g.lotto.id,
+            g.ubicazione.id,
         )
-
-    elif articolo.criterio_rotazione == articolo.CriterioRotazione.FIFO:
-        giacenze.sort(
-            key=lambda g: (
-                g.lotto.data_arrivo
-                or g.lotto.data_produzione
-                or date.max,
-                g.lotto.id,
-                g.ubicazione.id,
-            )
-        )
-
-    else:
-        giacenze.sort(
-            key=lambda g: (
-                g.lotto.id,
-                g.ubicazione.id,
-            )
-        )
+    )
 
     quantita_disponibile = sum(
         (
@@ -1427,7 +1785,7 @@ def proponi_prelievi_articolo(
 
     return {
         "articolo": articolo,
-        "criterio": articolo.criterio_rotazione,
+        "criterio": "FEFO/FIFO automatico",
         "quantita_richiesta": quantita_richiesta,
         "quantita_disponibile": quantita_disponibile,
         "quantita_mancante": max(

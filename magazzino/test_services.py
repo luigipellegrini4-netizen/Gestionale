@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 from django.contrib.auth import get_user_model
@@ -13,6 +13,7 @@ from .models import (
     Inscatolamento,
     Lotto,
     Movimento,
+    NonConformitaLotto,
     PrelievoProduzione,
     PrelievoProduzioneSemilavorato,
     Produzione,
@@ -37,7 +38,14 @@ from .services import (
     registra_scarto_prelievo_produzione,
     registra_scarti_tank,
     registra_controlli_tank,
+    registra_pastorizzazione,
+    registra_verifica_vuoto,
     registra_trasferimento,
+    proponi_prelievi_articolo,
+    modifica_tank_produzione,
+    annulla_tank_produzione,
+    apri_non_conformita_lotto,
+    gestisci_non_conformita_lotto,
 )
 
 
@@ -67,6 +75,7 @@ class OperazioniMagazzinoTests(TestCase):
             codice_lotto="LOT-TEST",
             tipo=Lotto.Tipo.ACQUISTO,
             quantita_iniziale=Decimal("10"),
+            peso_unita_acquisto=Decimal("2"),
         )
 
     def setUp(self):
@@ -90,13 +99,84 @@ class OperazioniMagazzinoTests(TestCase):
         self.assertEqual(movimento.quantita, Decimal("2.5"))
         self.assertEqual(movimento.eseguito_da, self.operatore)
 
+    def test_non_conformita_parziale_quarantena_e_reintegro(self):
+        non_conformita = apri_non_conformita_lotto(
+            lotto=self.lotto,
+            giacenza=self.giacenza,
+            numero_uda=3,
+            motivo="Confezioni danneggiate",
+            operatore=self.operatore,
+        )
+
+        self.giacenza.refresh_from_db()
+        self.assertEqual(self.giacenza.quantita, Decimal("4"))
+        self.assertEqual(non_conformita.quantita_quarantena, Decimal("6"))
+        self.assertTrue(
+            Movimento.objects.filter(
+                lotto=self.lotto,
+                tipo=Movimento.Tipo.QUARANTENA,
+                quantita=Decimal("6"),
+            ).exists()
+        )
+
+        gestisci_non_conformita_lotto(
+            non_conformita=non_conformita,
+            numero_uda_scartate=1,
+            numero_uda_reintegrate=2,
+            decisione="Due UDA conformi, una da eliminare",
+            responsabile=self.operatore,
+        )
+
+        self.giacenza.refresh_from_db()
+        non_conformita.refresh_from_db()
+        self.assertEqual(self.giacenza.quantita, Decimal("8"))
+        self.assertEqual(non_conformita.stato, NonConformitaLotto.Stato.CHIUSA)
+        self.assertEqual(non_conformita.numero_uda_scartate, 1)
+        self.assertEqual(non_conformita.numero_uda_reintegrate, 2)
+        self.assertTrue(
+            Movimento.objects.filter(
+                lotto=self.lotto,
+                tipo=Movimento.Tipo.REINTEGRO,
+                quantita=Decimal("4"),
+            ).exists()
+        )
+        self.assertTrue(
+            Movimento.objects.filter(
+                lotto=self.lotto,
+                tipo=Movimento.Tipo.SCARTO_NC,
+                quantita=Decimal("2"),
+            ).exists()
+        )
+
+    def test_non_conformita_rifiuta_decisione_con_totale_uda_errato(self):
+        non_conformita = apri_non_conformita_lotto(
+            lotto=self.lotto,
+            giacenza=self.giacenza,
+            numero_uda=2,
+            motivo="Verifica",
+            operatore=self.operatore,
+        )
+
+        with self.assertRaisesMessage(ValueError, "deve coincidere"):
+            gestisci_non_conformita_lotto(
+                non_conformita=non_conformita,
+                numero_uda_scartate=0,
+                numero_uda_reintegrate=1,
+                decisione="Decisione incompleta",
+                responsabile=self.operatore,
+            )
+
     def test_carico_lotto_crea_posizione_scaffale_e_piano(self):
         lotto, movimento = registra_carico_lotto(
             articolo=self.articolo,
             codice_lotto="LOT-SCAFFALE",
             fornitore=None,
-            quantita=Decimal("3"),
+            quantita=Decimal("10"),
             ubicazione=self.origine,
+            numero_colli=1,
+            unita_acquisto_per_collo=4,
+            peso_unita_acquisto=Decimal("2.5"),
+            ddt="DDT-TEST-001",
             scaffale="S1",
             piano="P2",
         )
@@ -107,6 +187,85 @@ class OperazioniMagazzinoTests(TestCase):
         self.assertEqual(giacenza.piano, "P2")
         self.assertEqual(movimento.scaffale_destinazione, "S1")
         self.assertEqual(movimento.piano_destinazione, "P2")
+        self.assertEqual(lotto.numero_colli, 1)
+        self.assertEqual(lotto.unita_acquisto_per_collo, 4)
+        self.assertEqual(lotto.numero_unita_acquisto_totali, 4)
+        self.assertEqual(lotto.peso_unita_acquisto, Decimal("2.5"))
+        self.assertEqual(lotto.ddt, "DDT-TEST-001")
+
+    def test_carichi_stesso_articolo_possono_avere_strutture_diverse(self):
+        lotto_a, _ = registra_carico_lotto(
+            articolo=self.articolo,
+            codice_lotto="FRAGOLE-A",
+            fornitore=None,
+            quantita=Decimal("10"),
+            ubicazione=self.origine,
+            numero_colli=1,
+            unita_acquisto_per_collo=4,
+            peso_unita_acquisto=Decimal("2.5"),
+            ddt="DDT-A",
+        )
+        lotto_b, _ = registra_carico_lotto(
+            articolo=self.articolo,
+            codice_lotto="FRAGOLE-B",
+            fornitore=None,
+            quantita=Decimal("20"),
+            ubicazione=self.origine,
+            numero_colli=1,
+            unita_acquisto_per_collo=2,
+            peso_unita_acquisto=Decimal("10"),
+            fattura="FATT-B",
+        )
+
+        self.assertEqual(lotto_a.unita_acquisto_per_collo, 4)
+        self.assertEqual(lotto_a.peso_unita_acquisto, Decimal("2.5"))
+        self.assertEqual(lotto_b.unita_acquisto_per_collo, 2)
+        self.assertEqual(lotto_b.peso_unita_acquisto, Decimal("10"))
+
+    def test_carico_calcola_e_salva_il_dato_mancante(self):
+        lotto, _ = registra_carico_lotto(
+            articolo=self.articolo,
+            codice_lotto="LOT-PESO-CALCOLATO",
+            fornitore=None,
+            quantita=Decimal("30"),
+            ubicazione=self.origine,
+            numero_colli=3,
+            unita_acquisto_per_collo=2,
+            peso_unita_acquisto=None,
+            ddt="DDT-CALCOLO",
+        )
+
+        lotto.refresh_from_db()
+        self.assertEqual(lotto.peso_unita_acquisto, Decimal("5"))
+
+    def test_prelievo_automatico_usa_fefo_e_fifo_a_parita_di_scadenza(self):
+        oggi = date.today()
+        dati_lotti = [
+            ("LOT-SCAD-NUOVO", oggi - timedelta(days=1), oggi + timedelta(days=5)),
+            ("LOT-SENZA-SCAD", oggi - timedelta(days=10), None),
+            ("LOT-SCAD-VECCHIO", oggi - timedelta(days=2), oggi + timedelta(days=5)),
+        ]
+        for codice, arrivo, scadenza in dati_lotti:
+            lotto = Lotto.objects.create(
+                articolo=self.articolo,
+                codice_lotto=codice,
+                tipo=Lotto.Tipo.ACQUISTO,
+                data_arrivo=arrivo,
+                data_scadenza=scadenza,
+                quantita_iniziale=Decimal("1"),
+            )
+            Giacenza.objects.create(
+                lotto=lotto,
+                ubicazione=self.origine,
+                quantita=Decimal("1"),
+            )
+
+        proposta = proponi_prelievi_articolo(self.articolo, Decimal("3"))
+
+        self.assertEqual(
+            [riga["lotto"].codice_lotto for riga in proposta["righe"]],
+            ["LOT-SCAD-VECCHIO", "LOT-SCAD-NUOVO", "LOT-SENZA-SCAD"],
+        )
 
     def test_trasferimento_aggiorna_entrambe_le_ubicazioni(self):
         movimento = registra_trasferimento(
@@ -226,18 +385,6 @@ class EliminazioneProduzioniBozzaTests(TestCase):
             categoria=Articolo.Categoria.PRODOTTO_FINITO,
             unita_misura=Articolo.UnitaMisura.KG,
         )
-        cls.vasetto = Articolo.objects.create(
-            codice="VASO-TEST",
-            descrizione="Vasetto test",
-            categoria=Articolo.Categoria.MOCA,
-            unita_misura=Articolo.UnitaMisura.PZ,
-        )
-        cls.tappo = Articolo.objects.create(
-            codice="TAPPO-TEST",
-            descrizione="Tappo test",
-            categoria=Articolo.Categoria.MOCA,
-            unita_misura=Articolo.UnitaMisura.PZ,
-        )
         cls.semilavorato = Articolo.objects.create(
             codice="SEMI-ANN",
             descrizione="Semilavorato annullamento",
@@ -344,6 +491,20 @@ class ConfermaProduzioneTests(TestCase):
             categoria=Articolo.Categoria.PRODOTTO_FINITO,
             unita_misura=Articolo.UnitaMisura.KG,
         )
+        cls.vasetto = Articolo.objects.create(
+            codice="VASO-TEST",
+            descrizione="Vasetto test",
+            categoria=Articolo.Categoria.MOCA,
+            unita_misura=Articolo.UnitaMisura.PZ,
+            formato=Decimal("250"),
+            unita_formato=Articolo.UnitaFormato.G,
+        )
+        cls.tappo = Articolo.objects.create(
+            codice="TAPPO-TEST",
+            descrizione="Tappo test",
+            categoria=Articolo.Categoria.MOCA,
+            unita_misura=Articolo.UnitaMisura.PZ,
+        )
         cls.ubicazione_ingrediente = Ubicazione.objects.create(
             nome="Materie prime produzione",
             tipo_magazzino=Ubicazione.TipoMagazzino.MP,
@@ -406,11 +567,13 @@ class ConfermaProduzioneTests(TestCase):
                 prelievo=prelievo,
                 quantita_scarto=Decimal("0"),
             )
-        registra_controlli_tank(tank, gradi_brix="65", ph="3.20")
+        tank = registra_controlli_tank(tank, gradi_brix="65", ph="3.20")
+        self.assertIsNotNone(tank.data_ora_controlli)
 
         produzione_confermata = conferma_produzione(
             produzione=produzione,
             quantita_prodotta=Decimal("4"),
+            quantita_ottenuta_kg=Decimal("1"),
             ubicazione_destinazione=self.ubicazione_prodotto,
             pastorizzazione_completata=True,
             vuoto_controllato=True,
@@ -433,6 +596,9 @@ class ConfermaProduzioneTests(TestCase):
             produzione_confermata.lotto.fase,
             Lotto.Fase.INVASETTATO,
         )
+        self.assertEqual(produzione_confermata.quantita_ottenuta_kg, Decimal("1"))
+        self.assertIsNotNone(produzione_confermata.data_ora_pastorizzazione)
+        self.assertIsNotNone(produzione_confermata.data_ora_verifica_vuoto)
         self.assertEqual(
             Giacenza.objects.get(lotto__articolo=self.vasetto).quantita,
             Decimal("6"),
@@ -450,6 +616,12 @@ class ConfermaProduzioneTests(TestCase):
             )
         )
         self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Dati e controlli di produzione")
+        self.assertContains(response, "Controlli dei tank")
+        self.assertContains(response, "65,00")
+        self.assertContains(response, "3,20")
+        self.assertContains(response, "Pastorizzazione")
+        self.assertContains(response, "Verifica del vuoto")
         self.assertEqual(
             response.context["tracciabilita_monte"][0]["quantita_scarto"],
             Decimal("0"),
@@ -463,6 +635,38 @@ class ConfermaProduzioneTests(TestCase):
         self.assertEqual(tank.numero_batch, 8)
         with self.assertRaisesMessage(ValueError, "tank aperto"):
             apri_tank_produzione(produzione, numero_batch=1)
+
+    def test_modifica_e_annullamento_tank_restano_nello_storico(self):
+        produzione = avvia_produzione(self.prodotto)
+        tank = apri_tank_produzione(produzione, numero_batch=5)
+
+        tank = modifica_tank_produzione(tank, numero_batch=7)
+        self.assertEqual(tank.numero_batch, 7)
+
+        tank = annulla_tank_produzione(
+            tank,
+            motivo="Non conformità organolettica",
+            operatore=self.user,
+        )
+        self.assertTrue(tank.annullato)
+        self.assertEqual(tank.motivo_annullamento, "Non conformità organolettica")
+        self.assertIsNotNone(tank.data_ora_annullamento)
+        self.assertEqual(tank.annullato_da, self.user)
+
+        nuovo_tank = apri_tank_produzione(produzione, numero_batch=5)
+        self.assertEqual(nuovo_tank.numero, 2)
+
+    def test_registra_separatamente_orari_pastorizzazione_e_sottovuoto(self):
+        produzione = avvia_produzione(self.prodotto)
+
+        produzione = registra_pastorizzazione(produzione)
+        self.assertTrue(produzione.pastorizzazione_completata)
+        self.assertIsNotNone(produzione.data_ora_pastorizzazione)
+        self.assertFalse(produzione.vuoto_controllato)
+
+        produzione = registra_verifica_vuoto(produzione)
+        self.assertTrue(produzione.vuoto_controllato)
+        self.assertIsNotNone(produzione.data_ora_verifica_vuoto)
 
     def test_registra_tutti_gli_ingredienti_del_tank(self):
         produzione = avvia_produzione(self.prodotto)

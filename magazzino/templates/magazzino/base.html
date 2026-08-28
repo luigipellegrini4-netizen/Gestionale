@@ -88,6 +88,14 @@
                 {% endif %}
             </div>
 
+            <div class="menu-section">
+                <div class="menu-title">QUALITÀ</div>
+                {% if perms.magazzino.operare_magazzino %}
+                    <a href="{% url 'apri_non_conformita_generale' %}">Apri non conformità</a>
+                {% endif %}
+                <a href="{% url 'registro_non_conformita' %}">Registro NC</a>
+            </div>
+
 
             <div class="menu-section">
                 <div class="menu-title">

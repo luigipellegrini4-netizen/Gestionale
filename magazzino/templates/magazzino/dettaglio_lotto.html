@@ -14,6 +14,13 @@
             — {{ lotto.codice_lotto }}
         </p>
     </div>
+    {% if perms.magazzino.operare_magazzino %}
+        <div class="page-actions">
+            <a href="{% url 'apri_non_conformita' lotto.pk %}" class="btn btn-danger">
+                Apri non conformità
+            </a>
+        </div>
+    {% endif %}
 </div>
 
 
@@ -86,6 +93,42 @@
             {{ lotto.quantita_iniziale }}
             {{ lotto.articolo.unita_misura }}
         </div>
+
+        {% if lotto.tipo == "ACQUISTO" %}
+        <div>
+            <strong>Fattura</strong>
+            {{ lotto.fattura|default:"—" }}
+        </div>
+
+        <div>
+            <strong>DDT</strong>
+            {{ lotto.ddt|default:"—" }}
+        </div>
+
+        <div>
+            <strong>Numero colli</strong>
+            {{ lotto.numero_colli|default:"—" }}
+        </div>
+
+        <div>
+            <strong>Numero di unità di acquisto per collo</strong>
+            {{ lotto.unita_acquisto_per_collo|default:"—" }}
+        </div>
+
+        <div>
+            <strong>Unità di acquisto totali</strong>
+            {{ lotto.numero_unita_acquisto_totali|default:"—" }}
+        </div>
+
+        <div>
+            <strong>Peso della singola unità di acquisto</strong>
+            {% if lotto.peso_unita_acquisto %}
+                {{ lotto.peso_unita_acquisto }} kg
+            {% else %}
+                —
+            {% endif %}
+        </div>
+        {% endif %}
 
     </div>
 
@@ -195,6 +238,85 @@
 
 </div>
 
+{% endif %}
+
+{% if produzione %}
+<div class="card">
+    <h3>Dati e controlli di produzione</h3>
+
+    <div class="detail-grid">
+        <div>
+            <strong>Quantità effettiva ottenuta</strong>
+            {{ produzione.quantita_ottenuta_kg|default:"—" }}{% if produzione.quantita_ottenuta_kg %} kg{% endif %}
+        </div>
+        <div>
+            <strong>Vasetti prodotti</strong>
+            {{ produzione.quantita_prodotta|default:"—" }}
+        </div>
+        <div>
+            <strong>Pastorizzazione</strong>
+            {% if produzione.pastorizzazione_completata %}
+                Completata
+                {% if produzione.data_ora_pastorizzazione %}
+                    il {{ produzione.data_ora_pastorizzazione|date:"d/m/Y H:i" }}
+                {% else %}(data non disponibile){% endif %}
+            {% else %}Non completata{% endif %}
+        </div>
+        <div>
+            <strong>Verifica del vuoto</strong>
+            {% if produzione.vuoto_controllato %}
+                Verificato
+                {% if produzione.data_ora_verifica_vuoto %}
+                    il {{ produzione.data_ora_verifica_vuoto|date:"d/m/Y H:i" }}
+                {% else %}(data non disponibile){% endif %}
+            {% else %}Non verificato{% endif %}
+        </div>
+    </div>
+
+    <h4 style="margin-top: 20px;">Controlli dei tank</h4>
+    {% if tank_produzione %}
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Tank</th>
+                        <th>Batch</th>
+                        <th>°Brix</th>
+                        <th>pH</th>
+                        <th>Data e ora controllo</th>
+                        <th>Stato</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for tank in tank_produzione %}
+                    <tr>
+                        <td>Tank {{ tank.numero }}</td>
+                        <td>{{ tank.numero_batch }}</td>
+                        <td>{{ tank.gradi_brix|default:"—" }}</td>
+                        <td>{{ tank.ph|default:"—" }}</td>
+                        <td>
+                            {% if tank.data_ora_controlli %}
+                                {{ tank.data_ora_controlli|date:"d/m/Y H:i" }}
+                            {% else %}
+                                Data non disponibile
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if tank.annullato %}
+                                <strong>Annullato</strong><br>
+                                {{ tank.motivo_annullamento }}<br>
+                                <small>{{ tank.data_ora_annullamento|date:"d/m/Y H:i" }}{% if tank.annullato_da %} · {{ tank.annullato_da.username }}{% endif %}</small>
+                            {% else %}Valido{% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <p>Nessun tank registrato per questa produzione.</p>
+    {% endif %}
+</div>
 {% endif %}
 
 
@@ -409,6 +531,65 @@
 
     {% endif %}
 
+</div>
+
+<div class="card">
+    <h3>Non conformità</h3>
+
+    {% if non_conformita %}
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Numero</th>
+                        <th>Stato</th>
+                        <th>Apertura</th>
+                        <th>UDA quarantena</th>
+                        <th>Motivo</th>
+                        <th>Esito</th>
+                        <th>Azioni</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for nc in non_conformita %}
+                        <tr>
+                            <td><strong>NC-{{ nc.pk }}</strong></td>
+                            <td>
+                                {% if nc.stato == "APERTA" %}
+                                    <span class="badge badge-danger">Aperta</span>
+                                {% elif nc.stato == "IN_LAVORAZIONE" %}
+                                    <span class="badge">In lavorazione</span>
+                                {% else %}
+                                    <span class="badge badge-success">Chiusa</span>
+                                {% endif %}
+                            </td>
+                            <td>{{ nc.data_apertura|date:"d/m/Y H:i" }}<br><small>{{ nc.aperta_da.get_username }}</small></td>
+                            <td>{{ nc.numero_uda_quarantena }} ({{ nc.quantita_quarantena }} {{ lotto.articolo.unita_misura }})</td>
+                            <td>{{ nc.motivo }}</td>
+                            <td>
+                                {% if nc.stato == "CHIUSA" %}
+                                    Scartate: {{ nc.numero_uda_scartate }}<br>
+                                    Reintegrate: {{ nc.numero_uda_reintegrate }}
+                                    {% if nc.decisione %}<br><small>{{ nc.decisione }}</small>{% endif %}
+                                {% else %}
+                                    In attesa del responsabile qualità
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if nc.stato != "CHIUSA" and perms.magazzino.gestire_non_conformita %}
+                                    <a href="{% url 'gestisci_non_conformita' nc.pk %}" class="btn">Gestisci</a>
+                                {% else %}
+                                    —
+                                {% endif %}
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <p>Non sono presenti non conformità per questo lotto.</p>
+    {% endif %}
 </div>
 
 <div class="card">

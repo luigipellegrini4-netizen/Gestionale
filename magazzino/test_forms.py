@@ -1,7 +1,91 @@
+from decimal import Decimal
+
 from django.test import TestCase
 
-from .forms import ArticoloForm, RicettaForm, RigaRicettaForm
-from .models import Articolo, Ricetta
+from .forms import ArticoloForm, CaricoLottoForm, RicettaForm, RigaRicettaForm
+from .models import Articolo, Ricetta, Ubicazione
+
+
+class CaricoLottoFormTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.articolo = Articolo.objects.create(
+            codice="CAR-FORM",
+            descrizione="Articolo carico form",
+            categoria=Articolo.Categoria.MATERIA_PRIMA,
+            unita_misura=Articolo.UnitaMisura.KG,
+        )
+        cls.ubicazione = Ubicazione.objects.create(
+            nome="Ubicazione carico form",
+            tipo_magazzino=Ubicazione.TipoMagazzino.MP,
+        )
+
+    def dati_validi(self):
+        return {
+            "articolo": self.articolo.pk,
+            "codice_lotto": "LOT-FORM",
+            "quantita": "10",
+            "numero_colli": "1",
+            "unita_acquisto_per_collo": "4",
+            "peso_unita_acquisto": "2.5",
+            "ddt": "DDT-123",
+            "ubicazione": self.ubicazione.pk,
+            "data_arrivo": "2026-08-28",
+        }
+
+    def test_richiede_almeno_fattura_o_ddt(self):
+        dati = self.dati_validi()
+        dati["ddt"] = ""
+        form = CaricoLottoForm(data=dati)
+
+        self.assertFalse(form.is_valid())
+        self.assertIn("__all__", form.errors)
+        self.assertIn("Fattura oppure DDT", form.errors["__all__"][0])
+
+    def test_ddt_soddisfa_il_requisito_del_documento(self):
+        form = CaricoLottoForm(data=self.dati_validi())
+
+        self.assertTrue(form.is_valid(), form.errors)
+
+    def test_fattura_soddisfa_il_requisito_del_documento(self):
+        dati = self.dati_validi()
+        dati["ddt"] = ""
+        dati["fattura"] = "FATT-123"
+        form = CaricoLottoForm(data=dati)
+
+        self.assertTrue(form.is_valid(), form.errors)
+
+    def test_calcola_peso_uda_mancante(self):
+        dati = self.dati_validi()
+        dati["peso_unita_acquisto"] = ""
+        form = CaricoLottoForm(data=dati)
+
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertEqual(form.cleaned_data["peso_unita_acquisto"], Decimal("2.500000"))
+
+    def test_calcola_numero_colli_mancante(self):
+        dati = self.dati_validi()
+        dati["numero_colli"] = ""
+        form = CaricoLottoForm(data=dati)
+
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertEqual(form.cleaned_data["numero_colli"], 1)
+
+    def test_calcola_numero_uda_per_collo_mancante(self):
+        dati = self.dati_validi()
+        dati["unita_acquisto_per_collo"] = ""
+        form = CaricoLottoForm(data=dati)
+
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertEqual(form.cleaned_data["unita_acquisto_per_collo"], 4)
+
+    def test_rifiuta_tre_valori_non_coerenti(self):
+        dati = self.dati_validi()
+        dati["peso_unita_acquisto"] = "3"
+        form = CaricoLottoForm(data=dati)
+
+        self.assertFalse(form.is_valid())
+        self.assertIn("non sono coerenti", form.errors["__all__"][0])
 
 
 class ArticoloFormTests(TestCase):
@@ -13,8 +97,9 @@ class ArticoloFormTests(TestCase):
             "categoria": Articolo.Categoria.MATERIA_PRIMA,
             "unita_misura": Articolo.UnitaMisura.KG,
             "quantita_per_confezione": "1.250",
+            "formato": "",
+            "unita_formato": "",
             "scorta_minima": "0",
-            "criterio_rotazione": Articolo.CriterioRotazione.FIFO,
             "tipo_packaging": "",
             "pezzi_per_imballo": "",
             "attivo": "on",
@@ -33,6 +118,24 @@ class ArticoloFormTests(TestCase):
 
         self.assertFalse(form.is_valid())
         self.assertIn("quantita_per_confezione", form.errors)
+
+    def test_formato_richiede_anche_unita(self):
+        dati = self.dati_validi()
+        dati["formato"] = "250"
+        form = ArticoloForm(data=dati)
+
+        self.assertFalse(form.is_valid())
+        self.assertIn("__all__", form.errors)
+
+    def test_accetta_formato_del_vasetto(self):
+        dati = self.dati_validi()
+        dati["categoria"] = Articolo.Categoria.MOCA
+        dati["unita_misura"] = Articolo.UnitaMisura.PZ
+        dati["formato"] = "250"
+        dati["unita_formato"] = Articolo.UnitaFormato.G
+        form = ArticoloForm(data=dati)
+
+        self.assertTrue(form.is_valid(), form.errors)
 
 
 class RicettaFormTests(TestCase):

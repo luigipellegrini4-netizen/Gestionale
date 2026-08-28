@@ -48,7 +48,7 @@ class ImportazioneCSVTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn(
-            "unita_misura;quantita_per_confezione;scorta_minima",
+            "unita_misura;quantita_per_confezione;formato;unita_formato;scorta_minima",
             response.content.decode("utf-8-sig"),
         )
 
@@ -106,11 +106,11 @@ class ImportazioneCSVTests(TestCase):
         self.carica(
             "articoli",
             "codice;descrizione;nome_produzione;categoria;unita_misura;"
-            "quantita_per_confezione;scorta_minima;"
-            "criterio_rotazione;tipo_packaging;pezzi_per_imballo;"
+            "quantita_per_confezione;formato;unita_formato;scorta_minima;"
+            "tipo_packaging;pezzi_per_imballo;"
             "attivo;note\n"
-            "MP-CSV;Materia prima CSV;Materia CSV;MATERIA_PRIMA;KG;1,25;2,5;"
-            "FEFO;;;vero;\n",
+            "MP-CSV;Materia prima CSV;Materia CSV;MATERIA_PRIMA;KG;1,25;250;G;2,5;"
+            ";;vero;\n",
         )
 
         self.assertTrue(Ubicazione.objects.filter(nome="Cella A").exists())
@@ -118,4 +118,6 @@ class ImportazioneCSVTests(TestCase):
         self.assertEqual(articolo.descrizione, "Materia prima CSV")
         self.assertEqual(articolo.nome_produzione, "Materia CSV")
         self.assertEqual(articolo.quantita_per_confezione, Decimal("1.250"))
+        self.assertEqual(articolo.formato, Decimal("250"))
+        self.assertEqual(articolo.unita_formato, Articolo.UnitaFormato.G)
         self.assertEqual(str(articolo.scorta_minima), "2.500")

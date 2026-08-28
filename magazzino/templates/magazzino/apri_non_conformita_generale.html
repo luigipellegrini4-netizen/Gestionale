@@ -1,0 +1,56 @@
+{% extends "magazzino/base.html" %}
+{% block title %}Apri non conformità - MIRA{% endblock %}
+{% block content %}
+<div class="page-header">
+    <div><h2>Apri non conformità</h2><p>Compilazione della segnalazione da parte dell'operatore.</p></div>
+</div>
+<div class="form-card">
+    <div class="message warning">
+        Se la NC riguarda un lotto, cercalo e indica posizione e numero di UDA:
+        la quantità corrispondente sarà resa immediatamente non disponibile.
+    </div>
+    {% if form.non_field_errors %}{% for error in form.non_field_errors %}<div class="message error">{{ error }}</div>{% endfor %}{% endif %}
+    <form method="post">
+        {% csrf_token %}
+        {{ form.as_p }}
+        <div class="form-actions">
+            <button type="submit" class="btn btn-danger">Apri non conformità</button>
+            <a href="{% url 'registro_non_conformita' %}" class="btn btn-secondary">Registro NC</a>
+        </div>
+    </form>
+</div>
+<script>
+(function () {
+    const ricerca = document.getElementById("id_ricerca_lotto");
+    const lotto = document.getElementById("id_lotto");
+    const giacenza = document.getElementById("id_giacenza");
+    let timer;
+
+    function caricaPosizioni() {
+        giacenza.innerHTML = '<option value="">Seleziona una posizione</option>';
+        if (!lotto.value) return;
+        fetch("{% url 'posizioni_lotto_non_conformita' %}?lotto=" + encodeURIComponent(lotto.value))
+            .then(response => response.json())
+            .then(data => data.posizioni.forEach(item => {
+                giacenza.add(new Option(item.label, item.id));
+            }));
+    }
+
+    ricerca.addEventListener("input", function () {
+        clearTimeout(timer);
+        const query = ricerca.value.trim();
+        if (query.length < 2) return;
+        timer = setTimeout(function () {
+            fetch("{% url 'ricerca_lotti_non_conformita' %}?q=" + encodeURIComponent(query))
+                .then(response => response.json())
+                .then(data => {
+                    lotto.innerHTML = '<option value="">Nessun lotto selezionato</option>';
+                    data.risultati.forEach(item => lotto.add(new Option(item.label, item.id)));
+                    giacenza.innerHTML = '<option value="">Seleziona prima un lotto</option>';
+                });
+        }, 250);
+    });
+    lotto.addEventListener("change", caricaPosizioni);
+}());
+</script>
+{% endblock %}

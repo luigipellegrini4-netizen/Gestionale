@@ -1,0 +1,32 @@
+{% extends "magazzino/base.html" %}
+{% block title %}Invasettamento {{ produzione.articolo.codice }} - MIRA{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div><h2>Invasettamento</h2><p>{{ produzione.articolo.codice }} - {{ produzione.articolo.descrizione }} · Lotto provvisorio {{ produzione.lotto_provvisorio }}</p></div>
+  <a href="{% url 'gestione_produzione' produzione.pk %}" class="btn btn-secondary" target="_blank" rel="noopener">Apri scheda RoboQubo</a>
+</div>
+
+<div class="card">
+  <h3>Tank disponibili</h3>
+  {% if tank_disponibili %}<table><thead><tr><th>Tank</th><th>Batch</th><th>°Brix</th><th>pH</th><th>Stato</th></tr></thead><tbody>{% for t in tank_disponibili %}<tr><td>Tank {{ t.numero }}</td><td>{% for b in t.batch.all %}{{ b.numero }}{% if not forloop.last %}, {% endif %}{% endfor %}</td><td>{{ t.gradi_brix }}</td><td>{{ t.ph }}</td><td>{% if t.conforme %}Disponibile{% else %}<strong>Non conforme</strong>{% endif %}</td></tr>{% endfor %}</tbody></table>{% else %}<p>Nessun tank ancora da invasettare. Aggiorna la pagina quando l’operatore RoboQubo chiude un nuovo tank.</p>{% endif %}
+</div>
+
+<div class="card" id="moca"><h3>1. Imballaggi MOCA</h3>
+{% if produzione.moca_igienizzati %}<p>✓ Vasetti e capsule puliti e igienizzati il {{ produzione.moca_igienizzati_il|date:"d/m/Y H:i" }}{% if produzione.moca_igienizzati_da %} da {{ produzione.moca_igienizzati_da.username }}{% endif %}.</p>{% else %}<form method="post">{% csrf_token %}<input type="hidden" name="azione" value="conferma_moca"><button class="btn">Conferma vasetti e capsule puliti e igienizzati</button></form>{% endif %}
+</div>
+
+{% for c in carrelli %}<div class="card" {% if not c.chiuso_il %}id="carrello-aperto"{% endif %}><h3>Carrello {{ c.numero }} · Tank {{ c.tank.numero|default:"—" }}</h3><p>{{ c.numero_pezzi }} vasetti · 2ª pastorizzazione 71 °C × 4 minuti: <strong>{{ c.get_esito_pastorizzazione_display }}</strong>{% if c.note_pastorizzazione %}<br>Note: {{ c.note_pastorizzazione }}{% endif %}</p>{% if c.chiuso_il %}<p>Shock termico/vuoto: <strong>{{ c.get_esito_shock_vuoto_display }}</strong> · Pezzi difettosi: {{ c.pezzi_difettosi }} · Capsule difettose: {{ c.capsule_difettose }} · Chiuso {{ c.chiuso_il|date:"d/m/Y H:i" }}.</p>{% else %}<h4>Abbattimento, shock termico e vuoto</h4><form method="post">{% csrf_token %}<input type="hidden" name="azione" value="chiudi_carrello"><input type="hidden" name="carrello_id" value="{{ c.pk }}">{{ chiusura_carrello_form.as_p }}<button class="btn">Registra e chiudi carrello</button></form>{% endif %}</div>{% endfor %}
+
+<div class="card" id="nuovo-carrello"><h3>Nuovo carrello</h3>
+{% if produzione.stato == "CONFERMATA" %}<p>La produzione è conclusa.</p>{% elif not produzione.moca_igienizzati %}<p>Prima conferma la pulizia e l’igienizzazione degli imballaggi MOCA.</p>{% elif not carrello_form.fields.tank.queryset.exists %}<p>Nessun tank chiuso è ancora disponibile. Aggiorna la pagina dopo la registrazione di pH e °Brix.</p>{% else %}<form method="post">{% csrf_token %}<input type="hidden" name="azione" value="apri_carrello">{{ carrello_form.as_p }}<button class="btn">Registra seconda pastorizzazione</button></form>{% endif %}
+</div>
+
+{% if produzione.fase == "INVASETTAMENTO" and produzione.stato == "BOZZA" %}
+<div class="card" id="conferma-produzione">
+  <h3>Conferma produzione</h3>
+  {% if carrelli_aperti %}<p>Chiudi tutti i carrelli prima di confermare la produzione.</p>{% else %}<p>Conferma il lotto definitivo e le quantità effettivamente ottenute.</p><form method="post">{% csrf_token %}<input type="hidden" name="azione" value="conferma_produzione">{{ conferma_form.as_p }}<button class="btn">Conferma produzione e crea lotto</button></form>{% endif %}
+</div>
+{% elif produzione.stato == "CONFERMATA" %}
+<div class="card" id="produzione-conclusa"><h3>Produzione conclusa</h3><p>Lotto <a href="{% url 'dettaglio_lotto' produzione.lotto.pk %}">{{ produzione.lotto.codice_lotto }}</a> · {{ produzione.quantita_prodotta }} vasetti.</p></div>
+{% endif %}
+{% endblock %}

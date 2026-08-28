@@ -137,6 +137,37 @@ textarea {
     font-size: 15px;
 }
 
+.control-options {
+    list-style: none;
+    margin: 8px 0 18px;
+    padding: 0;
+}
+
+.control-options li {
+    margin: 7px 0;
+}
+
+.control-options label {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0;
+    cursor: pointer;
+}
+
+.control-options input[type="radio"] {
+    width: auto;
+    margin: 0;
+    padding: 0;
+    flex: 0 0 auto;
+}
+
+input[type="checkbox"] {
+    width: auto;
+    margin: 0 6px 0 0;
+    vertical-align: middle;
+}
+
 
 /* ---------------------------------
    PULSANTI
@@ -452,6 +483,46 @@ button:hover {
 
 .table-container td {
     vertical-align: middle;
+}
+
+.category-groups {
+    display: grid;
+    gap: 24px;
+    margin-bottom: 30px;
+}
+
+.category-group {
+    overflow: hidden;
+    background: #fff;
+    border: 1px solid #d7e2de;
+    border-radius: 8px;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.06);
+}
+
+.category-group-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 14px 18px;
+    color: #fff;
+    background: #2f5d50;
+}
+
+.category-group-header h4 {
+    margin: 0;
+    color: inherit;
+    font-size: 18px;
+}
+
+.category-group-header span {
+    padding: 3px 9px;
+    color: #24473d;
+    background: #e8f3ef;
+    border-radius: 999px;
+    font-size: 13px;
+    font-weight: 700;
+    white-space: nowrap;
 }
 
 

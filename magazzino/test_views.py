@@ -14,6 +14,7 @@ from .models import (
     Inscatolamento,
     Lotto,
     Movimento,
+    NonConformitaLotto,
     Produzione,
     Ricetta,
     Ubicazione,
@@ -32,7 +33,7 @@ class SituazioneMagazzinoTests(TestCase):
             descrizione="Prodotto finito test",
             categoria=Articolo.Categoria.PRODOTTO_FINITO,
             unita_misura=Articolo.UnitaMisura.PZ,
-            quantita_per_confezione=Decimal("0.250"),
+            quantita_per_confezione=Decimal("10"),
         )
         cls.imballo = Articolo.objects.create(
             codice="SCATOLA-TEST",
@@ -61,6 +62,11 @@ class SituazioneMagazzinoTests(TestCase):
             codice_lotto="IMB-LOT",
             tipo=Lotto.Tipo.ACQUISTO,
             quantita_iniziale=Decimal("10"),
+            fattura="FATT-LOT-01",
+            ddt="DDT-LOT-01",
+            numero_colli=2,
+            unita_acquisto_per_collo=5,
+            peso_unita_acquisto=Decimal("1.25"),
         )
         Giacenza.objects.create(
             lotto=cls.lotto_prodotto,
@@ -95,37 +101,127 @@ class SituazioneMagazzinoTests(TestCase):
         )
         self.assertEqual(prodotto.giacenza_totale, Decimal("10"))
 
-        giacenze_prodotto = [
-            giacenza
-            for giacenza in response.context["giacenze"]
-            if giacenza.lotto_id == self.lotto_prodotto.pk
-        ]
-        self.assertEqual(len(giacenze_prodotto), 2)
-        for giacenza in giacenze_prodotto:
-            self.assertEqual(giacenza.quantita_totale, Decimal("10"))
-            self.assertEqual(giacenza.quantita_inscatolata, Decimal("6"))
-            self.assertEqual(giacenza.quantita_sfusa, Decimal("4"))
+    def test_operatore_vede_il_pulsante_scarico_materiale(self):
+        permesso = Permission.objects.get(codename="operare_magazzino")
+        self.user.user_permissions.add(permesso)
+        self.client.force_login(self.user)
 
-    def test_tabelle_sono_ordinate_per_categoria_e_ubicazione(self):
-        Giacenza.objects.create(
+        response = self.client.get(reverse("situazione_magazzino"))
+
+        self.assertContains(response, reverse("consumo"))
+        self.assertContains(response, "Scarico materiale")
+
+    def test_registro_generale_non_conformita_senza_lotto(self):
+        self.user.user_permissions.add(
+            Permission.objects.get(codename="operare_magazzino")
+        )
+        self.client.force_login(self.user)
+        apertura = self.client.post(
+            reverse("apri_non_conformita_generale"),
+            {
+                "ambito": NonConformitaLotto.Ambito.COMMERCIALE,
+                "tipo_nc": NonConformitaLotto.Tipo.RECLAMO_CLIENTE,
+                "lotto": "",
+                "motivo": "Segnalazione commerciale di prova",
+                "note_apertura": "Contatto immediato con il cliente",
+            },
+        )
+        self.assertRedirects(apertura, reverse("registro_non_conformita"))
+        nc = NonConformitaLotto.objects.get(
+            motivo="Segnalazione commerciale di prova"
+        )
+        self.assertIsNone(nc.lotto)
+        self.assertEqual(nc.stato, NonConformitaLotto.Stato.APERTA)
+
+        registro = self.client.get(
+            reverse("registro_non_conformita"), {"q": str(nc.pk)}
+        )
+        self.assertContains(registro, f"NC-{nc.pk}")
+        self.assertContains(registro, "Reclamo del Cliente")
+
+        self.user.user_permissions.add(
+            Permission.objects.get(codename="gestire_non_conformita")
+        )
+        self.client.force_login(self.user)
+        lavorazione = self.client.post(
+            reverse("gestisci_non_conformita", args=[nc.pk]),
+            {
+                "analisi_cause": "Analisi iniziale",
+                "azione_risoluzione": "Contattare il cliente",
+                "azione": "salva",
+            },
+        )
+        self.assertRedirects(lavorazione, reverse("registro_non_conformita"))
+        nc.refresh_from_db()
+        self.assertEqual(nc.stato, NonConformitaLotto.Stato.IN_LAVORAZIONE)
+
+    def test_apertura_generale_ricerca_lotto_e_mette_uda_in_quarantena(self):
+        giacenza = Giacenza.objects.create(
             lotto=self.lotto_imballo,
             ubicazione=self.ubicazione_a,
-            quantita=Decimal("2"),
+            quantita=Decimal("10"),
         )
+        self.user.user_permissions.add(
+            Permission.objects.get(codename="operare_magazzino")
+        )
+        self.client.force_login(self.user)
+
+        ricerca = self.client.get(
+            reverse("ricerca_lotti_non_conformita"), {"q": "IMB-LOT"}
+        )
+        self.assertEqual(ricerca.status_code, 200)
+        self.assertEqual(
+            ricerca.json()["risultati"][0]["id"], self.lotto_imballo.pk
+        )
+
+        apertura = self.client.post(
+            reverse("apri_non_conformita_generale"),
+            {
+                "ambito": NonConformitaLotto.Ambito.PRODUZIONE,
+                "tipo_nc": NonConformitaLotto.Tipo.VERSO_FORNITORE,
+                "lotto": self.lotto_imballo.pk,
+                "giacenza": giacenza.pk,
+                "numero_uda": 2,
+                "motivo": "Materiale non idoneo",
+                "note_apertura": "Isolamento immediato",
+            },
+        )
+
+        self.assertRedirects(apertura, reverse("registro_non_conformita"))
+        giacenza.refresh_from_db()
+        nc = NonConformitaLotto.objects.get(motivo="Materiale non idoneo")
+        self.assertEqual(nc.numero_uda_quarantena, 2)
+        self.assertEqual(nc.quantita_quarantena, Decimal("2.5"))
+        self.assertEqual(giacenza.quantita, Decimal("7.5"))
+
+    def test_articoli_sono_ordinati_e_separati_per_categoria(self):
 
         response = self.client.get(reverse("situazione_magazzino"))
 
         articoli = list(response.context["articoli"])
         self.assertEqual([a.pk for a in articoli], [self.imballo.pk, self.prodotto.pk])
 
-        giacenze = list(response.context["giacenze"])
         self.assertEqual(
-            [(g.ubicazione.nome, g.lotto.articolo.descrizione) for g in giacenze],
-            [
-                ("Prodotti finiti A", "Prodotto finito test"),
-                ("Prodotti finiti A", "Scatola test"),
-                ("Prodotti finiti B", "Prodotto finito test"),
-            ],
+            [gruppo["nome"] for gruppo in response.context["gruppi_articoli"]],
+            ["Packaging", "Prodotto finito"],
+        )
+        self.assertContains(response, 'class="category-group-header"', count=2)
+
+    def test_articolo_rimanda_alla_scheda_e_ai_suoi_lotti(self):
+        situazione = self.client.get(reverse("situazione_magazzino"))
+
+        self.assertContains(
+            situazione,
+            reverse("dettaglio_articolo", args=[self.prodotto.pk]),
+        )
+        self.assertNotContains(situazione, "Dettaglio giacenze per lotto")
+
+        dettaglio_articolo = self.client.get(
+            reverse("dettaglio_articolo", args=[self.prodotto.pk])
+        )
+        self.assertContains(
+            dettaglio_articolo,
+            reverse("dettaglio_lotto", args=[self.lotto_prodotto.pk]),
         )
 
     def test_dettaglio_articolo_mostra_quantita_per_confezione(self):
@@ -134,8 +230,123 @@ class SituazioneMagazzinoTests(TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Quantità per confezione")
-        self.assertContains(response, "0,250")
+        self.assertContains(response, "Unità per confezione di acquisto")
+        self.assertContains(response, "10")
+
+    def test_dettaglio_lotto_mostra_documenti_e_struttura_acquisto(self):
+        response = self.client.get(
+            reverse("dettaglio_lotto", args=[self.lotto_imballo.pk])
+        )
+
+        self.assertContains(response, "FATT-LOT-01")
+        self.assertContains(response, "DDT-LOT-01")
+        self.assertContains(response, "Numero colli")
+        self.assertContains(response, "Numero di unità di acquisto per collo")
+        self.assertContains(response, "Unità di acquisto totali")
+        self.assertContains(response, "Peso della singola unità di acquisto")
+
+    def test_apertura_e_gestione_non_conformita_da_dettaglio_lotto(self):
+        giacenza = Giacenza.objects.create(
+            lotto=self.lotto_imballo,
+            ubicazione=self.ubicazione_a,
+            quantita=Decimal("10"),
+        )
+        permesso_operatore = Permission.objects.get(codename="operare_magazzino")
+        self.user.user_permissions.add(permesso_operatore)
+        self.client.force_login(self.user)
+
+        apertura = self.client.post(
+            reverse("apri_non_conformita", args=[self.lotto_imballo.pk]),
+            {
+                "giacenza": giacenza.pk,
+                "numero_uda": 2,
+                "ambito": NonConformitaLotto.Ambito.PRODUZIONE,
+                "tipo_nc": NonConformitaLotto.Tipo.INTERNO,
+                "motivo": "Imballi danneggiati",
+                "note": "Controllare il trasporto",
+            },
+        )
+
+        self.assertRedirects(
+            apertura,
+            reverse("dettaglio_lotto", args=[self.lotto_imballo.pk]),
+        )
+        non_conformita = NonConformitaLotto.objects.get(lotto=self.lotto_imballo)
+        giacenza.refresh_from_db()
+        self.assertEqual(giacenza.quantita, Decimal("7.5"))
+
+        senza_permesso = self.client.get(
+            reverse("gestisci_non_conformita", args=[non_conformita.pk])
+        )
+        self.assertEqual(senza_permesso.status_code, 403)
+
+        permesso_qualita = Permission.objects.get(
+            codename="gestire_non_conformita"
+        )
+        self.user.user_permissions.add(permesso_qualita)
+        self.client.force_login(self.user)
+        gestione = self.client.post(
+            reverse("gestisci_non_conformita", args=[non_conformita.pk]),
+            {
+                "numero_uda_scartate": 1,
+                "numero_uda_reintegrate": 1,
+                "decisione": "Una UDA recuperata e una scartata",
+                "analisi_cause": "Danno durante la movimentazione",
+                "azione_risoluzione": "Revisione della movimentazione",
+                "responsabile_azione": "Responsabile magazzino",
+                "data_inizio_gestione": "2026-08-28",
+                "azione_immediata": "on",
+                "scadenza_prevista": "",
+                "esito_efficacia": NonConformitaLotto.EsitoEfficacia.EFFICACE,
+                "verifica_efficacia": "Controllo completato",
+                "data_verifica": "2026-08-28",
+                "azione": "chiudi",
+            },
+        )
+
+        self.assertRedirects(
+            gestione,
+            reverse("registro_non_conformita"),
+        )
+        giacenza.refresh_from_db()
+        non_conformita.refresh_from_db()
+        self.assertEqual(giacenza.quantita, Decimal("8.75"))
+        self.assertEqual(non_conformita.stato, NonConformitaLotto.Stato.CHIUSA)
+
+        dettaglio = self.client.get(
+            reverse("dettaglio_lotto", args=[self.lotto_imballo.pk])
+        )
+        self.assertContains(dettaglio, f"NC-{non_conformita.pk}")
+        self.assertContains(dettaglio, "Una UDA recuperata e una scartata")
+
+    def test_dettaglio_articolo_mostra_formato(self):
+        vasetto = Articolo.objects.create(
+            codice="VASO-250",
+            descrizione="Vasetto 250 g",
+            categoria=Articolo.Categoria.MOCA,
+            unita_misura=Articolo.UnitaMisura.PZ,
+            formato=Decimal("250"),
+            unita_formato=Articolo.UnitaFormato.G,
+        )
+
+        response = self.client.get(reverse("dettaglio_articolo", args=[vasetto.pk]))
+
+        self.assertContains(response, "Formato del singolo articolo")
+        self.assertContains(response, "250")
+        self.assertContains(response, "g")
+
+    def test_tabella_lotti_mostra_la_giacenza_attuale(self):
+        response = self.client.get(
+            reverse("dettaglio_articolo", args=[self.prodotto.pk])
+        )
+
+        lotto = next(
+            lotto
+            for lotto in response.context["lotti"]
+            if lotto.pk == self.lotto_prodotto.pk
+        )
+        self.assertEqual(lotto.giacenza_attuale, Decimal("10"))
+        self.assertContains(response, "Giacenza attuale")
 
     def test_numero_query_non_cresce_per_articolo_o_lotto(self):
         with CaptureQueriesContext(connection) as queries:

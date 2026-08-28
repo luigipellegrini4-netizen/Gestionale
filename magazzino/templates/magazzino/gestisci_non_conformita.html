@@ -1,0 +1,48 @@
+{% extends "magazzino/base.html" %}
+
+{% block title %}Gestisci NC-{{ non_conformita.pk }} - MIRA{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h2>Gestisci non conformità NC-{{ non_conformita.pk }}</h2>
+        <p>
+            {{ non_conformita.get_ambito_display }} — {{ non_conformita.get_tipo_nc_display }}
+            {% if non_conformita.lotto %}— lotto {{ non_conformita.lotto.codice_lotto }}{% endif %}
+        </p>
+    </div>
+</div>
+
+<div class="card">
+    <h3>Dati della segnalazione</h3>
+    <div class="detail-grid">
+        <div><strong>Stato</strong>{{ non_conformita.get_stato_display }}</div>
+        <div><strong>Aperta da</strong>{{ non_conformita.aperta_da.get_username }}</div>
+        <div><strong>Data apertura</strong>{{ non_conformita.data_apertura|date:"d/m/Y H:i" }}</div>
+        {% if non_conformita.numero_uda_quarantena %}
+        <div><strong>UDA in quarantena</strong>{{ non_conformita.numero_uda_quarantena }}</div>
+        <div><strong>Quantità per UDA</strong>{{ non_conformita.quantita_per_uda }} {{ non_conformita.lotto.articolo.unita_misura }}</div>
+        <div><strong>Quantità totale</strong>{{ non_conformita.quantita_quarantena }} {{ non_conformita.lotto.articolo.unita_misura }}</div>
+        <div><strong>Posizione originaria</strong>{{ non_conformita.ubicazione_origine.nome }}</div>
+        {% endif %}
+    </div>
+    <p><strong>Motivo</strong><br>{{ non_conformita.motivo }}</p>
+</div>
+
+<div class="form-card">
+    {% if form.non_field_errors %}
+        {% for error in form.non_field_errors %}
+            <div class="message error">{{ error }}</div>
+        {% endfor %}
+    {% endif %}
+    <form method="post">
+        {% csrf_token %}
+        {{ form.as_p }}
+        <div class="form-actions">
+            <button type="submit" name="azione" value="salva" class="btn btn-secondary">Salva in lavorazione</button>
+            <button type="submit" name="azione" value="chiudi" class="btn">Chiudi non conformità</button>
+            <a href="{% url 'registro_non_conformita' %}" class="btn btn-secondary">Annulla</a>
+        </div>
+    </form>
+</div>
+{% endblock %}

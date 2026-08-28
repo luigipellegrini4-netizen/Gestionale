@@ -12,10 +12,15 @@
 
 <div class="form-card">
     <form method="get" class="search-form">
-        <p><label for="id_q">Ricerca</label><input id="id_q" type="search" name="q" value="{{ query }}" placeholder="Utente, descrizione o percorso"></p>
+        <p><label for="id_q">Ricerca</label><input id="id_q" type="search" name="q" value="{{ query }}" placeholder="Utente, oggetto, ID, azione o descrizione"></p>
         <p><label for="id_area">Area</label>
             <select id="id_area" name="area"><option value="">Tutte</option>
                 {% for area in aree %}<option value="{{ area }}" {% if area == area_selezionata %}selected{% endif %}>{{ area }}</option>{% endfor %}
+            </select>
+        </p>
+        <p><label for="id_esito">Esito</label>
+            <select id="id_esito" name="esito"><option value="">Tutti</option>
+                {% for valore, etichetta in esiti %}<option value="{{ valore }}" {% if valore == esito_selezionato %}selected{% endif %}>{{ etichetta }}</option>{% endfor %}
             </select>
         </p>
         <p><label for="id_azione">Operazione</label>
@@ -34,7 +39,7 @@
 
 <div class="table-container">
     <table>
-        <thead><tr><th>Data e ora</th><th>Utente</th><th>Area</th><th>Operazione</th><th>Descrizione</th><th>IP</th></tr></thead>
+        <thead><tr><th>Data e ora</th><th>Utente</th><th>Area</th><th>Operazione</th><th>Oggetto</th><th>Esito</th><th>IP</th><th></th></tr></thead>
         <tbody>
             {% for log in logs %}
                 <tr>
@@ -42,11 +47,13 @@
                     <td>{% if log.utente %}{{ log.utente.get_full_name|default:log.utente.username }}{% else %}Sistema / storico{% endif %}</td>
                     <td>{{ log.area|default:"—" }}</td>
                     <td>{{ log.azione }}</td>
-                    <td>{{ log.descrizione }}</td>
+                    <td>{{ log.oggetto|default:log.descrizione }}</td>
+                    <td>{{ log.get_esito_display }}</td>
                     <td>{{ log.indirizzo_ip|default:"—" }}</td>
+                    <td><a href="{% url 'dettaglio_registro_operazione' log.pk %}" class="btn btn-secondary">Dettagli</a></td>
                 </tr>
             {% empty %}
-                <tr><td colspan="6">Nessuna operazione registrata.</td></tr>
+                <tr><td colspan="8">Nessuna operazione registrata.</td></tr>
             {% endfor %}
         </tbody>
     </table>

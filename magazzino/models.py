@@ -1,5 +1,7 @@
 from django.conf import settings
 from django.db import models
+from decimal import Decimal
+import uuid
 
 
 class Articolo(models.Model):
@@ -17,16 +19,17 @@ class Articolo(models.Model):
         L = "L", "Litri"
         PZ = "PZ", "Pezzi"
 
-    class CriterioRotazione(models.TextChoices):
-        FIFO = "FIFO", "FIFO"
-        FEFO = "FEFO", "FEFO"
-        NESSUNO = "NESSUNO", "Nessuno"
-
     class TipoPackaging(models.TextChoices):
         ETICHETTA = "ETICHETTA", "Etichetta"
         SCATOLA = "SCATOLA", "Scatola"
         COFANETTO = "COFANETTO", "Cofanetto"
         ALTRO = "ALTRO", "Altro"
+
+    class UnitaFormato(models.TextChoices):
+        G = "G", "g"
+        KG = "KG", "kg"
+        ML = "ML", "ml"
+        L = "L", "l"
 
     tipo_packaging = models.CharField(
         max_length=20,
@@ -66,16 +69,23 @@ class Articolo(models.Model):
         blank=True,
     )
 
+    formato = models.DecimalField(
+        max_digits=12,
+        decimal_places=3,
+        null=True,
+        blank=True,
+    )
+
+    unita_formato = models.CharField(
+        max_length=2,
+        choices=UnitaFormato.choices,
+        blank=True,
+    )
+
     scorta_minima = models.DecimalField(
         max_digits=12,
         decimal_places=3,
         default=0,
-    )
-
-    criterio_rotazione = models.CharField(
-        max_length=10,
-        choices=CriterioRotazione.choices,
-        default=CriterioRotazione.FIFO,
     )
 
     pezzi_per_imballo = models.PositiveIntegerField(
@@ -104,6 +114,17 @@ class Articolo(models.Model):
                 ),
                 name="articolo_quantita_confezione_positiva",
             ),
+            models.CheckConstraint(
+                condition=models.Q(formato__isnull=True) | models.Q(formato__gt=0),
+                name="articolo_formato_positivo",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(formato__isnull=True, unita_formato="")
+                    | models.Q(formato__isnull=False) & ~models.Q(unita_formato="")
+                ),
+                name="articolo_formato_unita_coerenti",
+            ),
         ]
 
     def __str__(self):
@@ -112,6 +133,16 @@ class Articolo(models.Model):
     @property
     def nome_per_produzione(self):
         return self.nome_produzione or self.descrizione
+
+    @property
+    def formato_kg(self):
+        if self.formato is None:
+            return None
+        if self.unita_formato == self.UnitaFormato.G:
+            return self.formato / 1000
+        if self.unita_formato == self.UnitaFormato.KG:
+            return self.formato
+        return None
 
 
 class Fornitore(models.Model):
@@ -264,9 +295,44 @@ class Lotto(models.Model):
         decimal_places=6,
     )
 
+    fattura = models.CharField(max_length=100, blank=True)
+
+    ddt = models.CharField("DDT", max_length=100, blank=True)
+
+    numero_colli = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+    )
+
+    unita_acquisto_per_collo = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+    )
+
+    peso_unita_acquisto = models.DecimalField(
+        max_digits=12,
+        decimal_places=6,
+        null=True,
+        blank=True,
+    )
+
     note = models.TextField(
         blank=True,
     )
+
+    @property
+    def numero_unita_acquisto_totali(self):
+        if self.numero_colli and self.unita_acquisto_per_collo:
+            return self.numero_colli * self.unita_acquisto_per_collo
+        return None
+
+    @property
+    def quantita_singola_uda(self):
+        if self.peso_unita_acquisto:
+            return self.peso_unita_acquisto
+        if self.articolo.unita_misura == Articolo.UnitaMisura.PZ:
+            return Decimal("1")
+        return None
 
     def __str__(self):
         return f"{self.articolo.codice} - {self.codice_lotto}"
@@ -280,6 +346,27 @@ class Lotto(models.Model):
             models.CheckConstraint(
                 condition=models.Q(quantita_iniziale__gt=0),
                 name="lotto_quantita_iniziale_positiva",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(numero_colli__isnull=True)
+                    | models.Q(numero_colli__gt=0)
+                ),
+                name="lotto_numero_colli_positivo",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(unita_acquisto_per_collo__isnull=True)
+                    | models.Q(unita_acquisto_per_collo__gt=0)
+                ),
+                name="lotto_uda_per_collo_positive",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(peso_unita_acquisto__isnull=True)
+                    | models.Q(peso_unita_acquisto__gt=0)
+                ),
+                name="lotto_peso_uda_positivo",
             ),
         ]
 
@@ -334,6 +421,9 @@ class Movimento(models.Model):
         RICONFEZIONAMENTO = "RICONFEZIONAMENTO", "Riconfezionamento"
         VENDITA = "VENDITA", "Vendita"
         RETTIFICA = "RETTIFICA", "Rettifica"
+        QUARANTENA = "QUARANTENA", "Quarantena per non conformità"
+        REINTEGRO = "REINTEGRO", "Reintegro da quarantena"
+        SCARTO_NC = "SCARTO_NC", "Scarto per non conformità"
 
     data_ora = models.DateTimeField(
         auto_now_add=True,
@@ -411,6 +501,126 @@ class Movimento(models.Model):
         return f"{self.data_ora:%Y-%m-%d %H:%M} - {self.tipo} - {self.lotto}"
 
 
+class NonConformitaLotto(models.Model):
+    class Stato(models.TextChoices):
+        APERTA = "APERTA", "Aperta"
+        IN_LAVORAZIONE = "IN_LAVORAZIONE", "In lavorazione"
+        CHIUSA = "CHIUSA", "Chiusa"
+
+    class Ambito(models.TextChoices):
+        PRODUZIONE = "PRODUZIONE", "Produzione"
+        COMMERCIALE = "COMMERCIALE", "Commerciale"
+
+    class Tipo(models.TextChoices):
+        RECLAMO_CLIENTE = "RECLAMO_CLIENTE", "Reclamo del Cliente"
+        VERSO_FORNITORE = "VERSO_FORNITORE", "Verso fornitore"
+        INTERNO = "INTERNO", "Interno (Processo/Prodotto)"
+        STRUTTURALE = "STRUTTURALE", "Strutturale"
+        ALTRO = "ALTRO", "Altro"
+
+    class EsitoEfficacia(models.TextChoices):
+        EFFICACE = "EFFICACE", "Efficace"
+        NON_EFFICACE = "NON_EFFICACE", "Non efficace"
+        NON_APPLICABILE = "NON_APPLICABILE", "Non applicabile"
+
+    lotto = models.ForeignKey(
+        Lotto,
+        on_delete=models.PROTECT,
+        related_name="non_conformita",
+        null=True,
+        blank=True,
+    )
+    stato = models.CharField(
+        max_length=20,
+        choices=Stato.choices,
+        default=Stato.APERTA,
+        db_index=True,
+    )
+    ambito = models.CharField(
+        max_length=15,
+        choices=Ambito.choices,
+        default=Ambito.PRODUZIONE,
+        db_index=True,
+    )
+    tipo_nc = models.CharField(
+        max_length=25,
+        choices=Tipo.choices,
+        default=Tipo.INTERNO,
+        db_index=True,
+    )
+    ubicazione_origine = models.ForeignKey(
+        Ubicazione,
+        on_delete=models.PROTECT,
+        related_name="non_conformita_lotti",
+        null=True,
+        blank=True,
+    )
+    scaffale_origine = models.CharField(max_length=30, blank=True)
+    piano_origine = models.CharField(max_length=30, blank=True)
+    numero_uda_quarantena = models.PositiveIntegerField(null=True, blank=True)
+    quantita_quarantena = models.DecimalField(max_digits=12, decimal_places=6, null=True, blank=True)
+    quantita_per_uda = models.DecimalField(max_digits=12, decimal_places=6, null=True, blank=True)
+    motivo = models.TextField()
+    note_apertura = models.TextField(blank=True)
+    aperta_da = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="non_conformita_aperte",
+    )
+    data_apertura = models.DateTimeField(auto_now_add=True)
+    numero_uda_scartate = models.PositiveIntegerField(null=True, blank=True)
+    numero_uda_reintegrate = models.PositiveIntegerField(null=True, blank=True)
+    decisione = models.TextField(blank=True)
+    gestita_da = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="non_conformita_gestite",
+        null=True,
+        blank=True,
+    )
+    data_chiusura = models.DateTimeField(null=True, blank=True)
+    analisi_cause = models.TextField(blank=True)
+    azione_risoluzione = models.TextField(blank=True)
+    responsabile_azione = models.CharField(max_length=200, blank=True)
+    data_inizio_gestione = models.DateField(null=True, blank=True)
+    azione_immediata = models.BooleanField(default=False)
+    scadenza_prevista = models.DateField(null=True, blank=True)
+    esito_efficacia = models.CharField(
+        max_length=20,
+        choices=EsitoEfficacia.choices,
+        blank=True,
+    )
+    verifica_efficacia = models.TextField(blank=True)
+    data_verifica = models.DateField(null=True, blank=True)
+
+    class Meta:
+        ordering = ("-data_apertura", "-id")
+        permissions = [
+            (
+                "gestire_non_conformita",
+                "Può decidere scarto e reintegro delle non conformità",
+            ),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=(models.Q(numero_uda_quarantena__isnull=True) | models.Q(numero_uda_quarantena__gt=0)),
+                name="nc_numero_uda_quarantena_positivo",
+            ),
+            models.CheckConstraint(
+                condition=(models.Q(quantita_quarantena__isnull=True) | models.Q(quantita_quarantena__gt=0)),
+                name="nc_quantita_quarantena_positiva",
+            ),
+            models.CheckConstraint(
+                condition=(models.Q(quantita_per_uda__isnull=True) | models.Q(quantita_per_uda__gt=0)),
+                name="nc_quantita_per_uda_positiva",
+            ),
+        ]
+
+    def __str__(self):
+        riferimento = self.lotto if self.lotto else self.get_tipo_nc_display()
+        return f"NC {self.pk or 'nuova'} - {riferimento} - {self.get_stato_display()}"
+
+
 class Ricetta(models.Model):
 
     articolo = models.ForeignKey(
@@ -432,6 +642,18 @@ class Ricetta(models.Model):
         default=True,
     )
 
+    articolo_ricetta_attiva = models.GeneratedField(
+        expression=models.Case(
+            models.When(attiva=True, then=models.F("articolo")),
+            default=models.Value(None),
+        ),
+        output_field=models.BigIntegerField(),
+        db_persist=True,
+        unique=True,
+        editable=False,
+        blank=True,
+    )
+
     note = models.TextField(
         blank=True,
     )
@@ -441,11 +663,6 @@ class Ricetta(models.Model):
             models.UniqueConstraint(
                 fields=["articolo", "versione"],
                 name="unica_versione_ricetta_per_articolo",
-            ),
-            models.UniqueConstraint(
-                fields=["articolo"],
-                condition=models.Q(attiva=True),
-                name="unica_ricetta_attiva_per_articolo",
             ),
         ]
 
@@ -498,6 +715,12 @@ class RigaRicetta(models.Model):
 
 class Produzione(models.Model):
 
+    class Fase(models.TextChoices):
+        PREPARAZIONE = "PREPARAZIONE", "Preparazione"
+        ROBOQUBO = "ROBOQUBO", "RoboQubo"
+        INVASETTAMENTO = "INVASETTAMENTO", "Invasettamento"
+        COMPLETATA = "COMPLETATA", "Completata"
+
     class Stato(models.TextChoices):
         BOZZA = "BOZZA", "Bozza"
         CONFERMATA = "CONFERMATA", "Confermata"
@@ -528,6 +751,18 @@ class Produzione(models.Model):
 
     data_produzione = models.DateField()
 
+    fase = models.CharField(max_length=20, choices=Fase.choices, default=Fase.PREPARAZIONE)
+    lotto_provvisorio = models.CharField(max_length=50, blank=True)
+    numero_batch_previsti = models.PositiveSmallIntegerField(default=1)
+    preparazione_chiusa_il = models.DateTimeField(null=True, blank=True)
+    roboqubo_chiuso_il = models.DateTimeField(null=True, blank=True)
+    moca_igienizzati = models.BooleanField(default=False)
+    moca_igienizzati_il = models.DateTimeField(null=True, blank=True)
+    moca_igienizzati_da = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True,
+        related_name="produzioni_moca_igienizzati",
+    )
+
     ubicazione_destinazione = models.ForeignKey(
         Ubicazione,
         on_delete=models.PROTECT,
@@ -549,12 +784,32 @@ class Produzione(models.Model):
         blank=True,
     )
 
+    quantita_ottenuta_kg = models.DecimalField(
+        max_digits=12,
+        decimal_places=3,
+        null=True,
+        blank=True,
+    )
+
     pastorizzazione_completata = models.BooleanField(default=False)
     vuoto_controllato = models.BooleanField(default=False)
+    data_ora_pastorizzazione = models.DateTimeField(null=True, blank=True)
+    data_ora_verifica_vuoto = models.DateTimeField(null=True, blank=True)
 
     data_creazione = models.DateTimeField(
         auto_now_add=True,
     )
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(quantita_ottenuta_kg__isnull=True)
+                    | models.Q(quantita_ottenuta_kg__gt=0)
+                ),
+                name="produzione_quantita_ottenuta_positiva",
+            ),
+        ]
 
     def __str__(self):
         lotto = self.lotto.codice_lotto if self.lotto else "SENZA LOTTO"
@@ -582,6 +837,18 @@ class TankProduzione(models.Model):
     ph = models.DecimalField(
         max_digits=4,
         decimal_places=2,
+        null=True,
+        blank=True,
+    )
+    data_ora_controlli = models.DateTimeField(null=True, blank=True)
+    chiuso_il = models.DateTimeField(null=True, blank=True)
+    annullato = models.BooleanField(default=False)
+    motivo_annullamento = models.TextField(blank=True)
+    data_ora_annullamento = models.DateTimeField(null=True, blank=True)
+    annullato_da = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="tank_produzione_annullati",
         null=True,
         blank=True,
     )
@@ -614,8 +881,62 @@ class TankProduzione(models.Model):
     def controllato(self):
         return self.gradi_brix is not None and self.ph is not None
 
+    @property
+    def conforme(self):
+        return self.controllato and self.ph < 4.1 and 40 <= self.gradi_brix <= 45
+
     def __str__(self):
         return f"Produzione {self.produzione_id} - Tank {self.numero}"
+
+
+class EsitoControllo(models.TextChoices):
+    C = "C", "Conforme"
+    NC = "NC", "Non conforme"
+    NA = "NA", "Non applicabile"
+
+
+class BatchProduzione(models.Model):
+    produzione = models.ForeignKey(Produzione, on_delete=models.CASCADE, related_name="batch")
+    tank = models.ForeignKey(TankProduzione, on_delete=models.PROTECT, related_name="batch", null=True, blank=True)
+    numero = models.PositiveSmallIntegerField()
+    ora_inizio = models.TimeField()
+    ora_fine = models.TimeField()
+    temperatura_conformita = models.DecimalField(max_digits=5, decimal_places=2, default=82)
+    durata_conformita_secondi = models.PositiveSmallIntegerField(default=60)
+    esito_conformita = models.CharField(max_length=2, choices=EsitoControllo.choices)
+    note = models.TextField(blank=True)
+    registrato_il = models.DateTimeField(auto_now_add=True)
+    registrato_da = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True)
+
+    class Meta:
+        ordering = ["numero"]
+        constraints = [models.UniqueConstraint(fields=["produzione", "numero"], name="unico_batch_per_produzione")]
+
+
+class CarrelloProduzione(models.Model):
+    produzione = models.ForeignKey(Produzione, on_delete=models.CASCADE, related_name="carrelli")
+    tank = models.ForeignKey(
+        TankProduzione, on_delete=models.PROTECT, related_name="carrelli",
+        null=True, blank=True,
+    )
+    numero = models.PositiveSmallIntegerField()
+    numero_pezzi = models.PositiveIntegerField()
+    temperatura_pastorizzazione = models.DecimalField(max_digits=5, decimal_places=2, default=71)
+    durata_pastorizzazione_minuti = models.PositiveSmallIntegerField(default=4)
+    esito_pastorizzazione = models.CharField(max_length=2, choices=EsitoControllo.choices)
+    note_pastorizzazione = models.TextField(blank=True)
+    pastorizzazione_registrata_il = models.DateTimeField(auto_now_add=True)
+    esito_shock_vuoto = models.CharField(max_length=2, choices=EsitoControllo.choices, blank=True)
+    pezzi_difettosi = models.PositiveIntegerField(default=0)
+    note_shock_vuoto = models.TextField(blank=True)
+    shock_vuoto_registrato_il = models.DateTimeField(null=True, blank=True)
+    capsule_difettose = models.PositiveIntegerField(null=True, blank=True)
+    chiuso_il = models.DateTimeField(null=True, blank=True)
+    registrato_da = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True)
+
+    class Meta:
+        ordering = ["numero"]
+        constraints = [models.UniqueConstraint(fields=["produzione", "numero"], name="unico_carrello_per_produzione")]
 
 
 class PrelievoProduzione(models.Model):
@@ -916,6 +1237,11 @@ class Inscatolamento(models.Model):
 
 
 class RegistroOperazione(models.Model):
+    class Esito(models.TextChoices):
+        RIUSCITA = "RIUSCITA", "Riuscita"
+        RIFIUTATA = "RIFIUTATA", "Rifiutata"
+        ERRORE = "ERRORE", "Errore"
+
     data_ora = models.DateTimeField(auto_now_add=True, db_index=True)
     utente = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -931,6 +1257,16 @@ class RegistroOperazione(models.Model):
     percorso = models.CharField(max_length=500, blank=True)
     indirizzo_ip = models.GenericIPAddressField(null=True, blank=True)
     dettagli = models.JSONField(default=dict, blank=True)
+    esito = models.CharField(max_length=15, choices=Esito.choices, default=Esito.RIUSCITA, db_index=True)
+    modello = models.CharField(max_length=100, blank=True, db_index=True)
+    record_id = models.CharField(max_length=100, blank=True, db_index=True)
+    oggetto = models.CharField(max_length=500, blank=True)
+    valori_precedenti = models.JSONField(default=dict, blank=True)
+    valori_successivi = models.JSONField(default=dict, blank=True)
+    motivazione = models.TextField(blank=True)
+    codice_operazione = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    user_agent = models.TextField(blank=True)
+    errore = models.TextField(blank=True)
 
     class Meta:
         ordering = ["-data_ora", "-pk"]

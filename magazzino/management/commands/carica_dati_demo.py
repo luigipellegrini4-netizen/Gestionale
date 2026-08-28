@@ -37,16 +37,16 @@ FORNITORI = [
 ]
 
 ARTICOLI = [
-    ("MP-FRAGOLA", "Fragole", "MATERIA_PRIMA", "KG", "10", "FEFO", ""),
-    ("MP-ZUCCHERO", "Zucchero semolato", "MATERIA_PRIMA", "KG", "25", "FIFO", ""),
-    ("MP-LIMONE", "Succo di limone", "MATERIA_PRIMA", "L", "5", "FEFO", ""),
-    ("SL-PECTINA", "Pectina", "SEMILAVORATO", "KG", "1", "FIFO", ""),
-    ("MOCA-VASO-250", "Vasetto vetro 250 g", "MOCA", "PZ", "1", "FIFO", ""),
-    ("MOCA-CAPS-63", "Capsula twist-off 63 mm", "MOCA", "PZ", "1", "FIFO", ""),
-    ("ETI-FRAG-250", "Etichetta confettura fragole 250 g", "PACKAGING", "PZ", "1", "FIFO", "ETICHETTA"),
-    ("SCA-12X250", "Scatola 12 vasetti da 250 g", "PACKAGING", "PZ", "1", "FIFO", "SCATOLA"),
-    ("PF-FRAG-250", "Confettura extra di fragole 250 g", "PRODOTTO_FINITO", "PZ", None, "FIFO", ""),
-    ("IGI-DETERGENTE", "Detergente impianti alimentari", "IGIENE", "L", "5", "FIFO", ""),
+    ("MP-FRAGOLA", "Fragole", "MATERIA_PRIMA", "KG", "10", ""),
+    ("MP-ZUCCHERO", "Zucchero semolato", "MATERIA_PRIMA", "KG", "25", ""),
+    ("MP-LIMONE", "Succo di limone", "MATERIA_PRIMA", "L", "5", ""),
+    ("SL-PECTINA", "Pectina", "SEMILAVORATO", "KG", "1", ""),
+    ("MOCA-VASO-250", "Vasetto vetro 250 g", "MOCA", "PZ", "10", ""),
+    ("MOCA-CAPS-63", "Capsula twist-off 63 mm", "MOCA", "PZ", "10", ""),
+    ("ETI-FRAG-250", "Etichetta confettura fragole 250 g", "PACKAGING", "PZ", "1", "ETICHETTA"),
+    ("SCA-12X250", "Scatola 12 vasetti da 250 g", "PACKAGING", "PZ", "1", "SCATOLA"),
+    ("PF-FRAG-250", "Confettura extra di fragole 250 g", "PRODOTTO_FINITO", "PZ", None, ""),
+    ("IGI-DETERGENTE", "Detergente impianti alimentari", "IGIENE", "L", "5", ""),
 ]
 
 
@@ -77,7 +77,7 @@ class Command(BaseCommand):
             )
 
         articoli = {}
-        for codice, descrizione, categoria, unita, confezione, rotazione, packaging in ARTICOLI:
+        for codice, descrizione, categoria, unita, confezione, packaging in ARTICOLI:
             valori = {
                 "descrizione": descrizione,
                 "nome_produzione": descrizione,
@@ -87,11 +87,13 @@ class Command(BaseCommand):
                     Decimal(confezione) if confezione is not None else None
                 ),
                 "scorta_minima": Decimal("0"),
-                "criterio_rotazione": rotazione,
                 "tipo_packaging": packaging,
                 "attivo": True,
                 "note": "Dato dimostrativo",
             }
+            if codice == "MOCA-VASO-250":
+                valori["formato"] = Decimal("250")
+                valori["unita_formato"] = "G"
             if packaging == "SCATOLA":
                 valori["pezzi_per_imballo"] = 12
             articolo, _ = Articolo.objects.update_or_create(
@@ -157,6 +159,10 @@ class Command(BaseCommand):
                 fornitore=Fornitore.objects.get(codice=fornitore_codice),
                 quantita=Decimal(quantita),
                 ubicazione=Ubicazione.objects.get(nome=ubicazione_nome),
+                numero_colli=1,
+                unita_acquisto_per_collo=1,
+                peso_unita_acquisto=Decimal(quantita),
+                ddt=f"DDT-DEMO-{lotto_codice}",
                 scaffale=scaffale,
                 piano=piano,
                 data_arrivo=date.today(),
