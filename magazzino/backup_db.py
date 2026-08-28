@@ -12,14 +12,17 @@ from .models import (
     Giacenza, Inscatolamento, Lotto, Movimento, PrelievoProduzione,
     PrelievoProduzioneSemilavorato, Produzione, ProduzioneSemilavorato,
     RegistroOperazione, Ricetta, RigaRicetta, TankProduzione, Ubicazione,
+    BatchProduzione, CarrelloProduzione, NonConformitaLotto,
 )
 
 
 FORMATO = "MIRA_BACKUP"
 VERSIONE = 1
 MODELLI = [
-    Fornitore, Ubicazione, Articolo, Lotto, Giacenza, Movimento, Ricetta,
+    Fornitore, Ubicazione, Articolo, Lotto, NonConformitaLotto,
+    Giacenza, Movimento, Ricetta,
     RigaRicetta, Produzione, TankProduzione, PrelievoProduzione,
+    BatchProduzione, CarrelloProduzione,
     ProduzioneSemilavorato,
     PrelievoProduzioneSemilavorato, Confezionamento,
     ConsumoConfezionamento, Inscatolamento,
@@ -27,12 +30,24 @@ MODELLI = [
 ]
 MODELLI_AMMESSI = {modello._meta.label_lower for modello in MODELLI}
 ORDINE_ELIMINAZIONE = [
-    RegistroOperazione, ConsumoConfezionamento, Inscatolamento, Confezionamento,
+    RegistroOperazione, NonConformitaLotto,
+    ConsumoConfezionamento, Inscatolamento, Confezionamento,
     PrelievoProduzioneSemilavorato, PrelievoProduzione,
+    CarrelloProduzione, BatchProduzione,
     TankProduzione, ProduzioneSemilavorato, Produzione,
     RigaRicetta, Ricetta, Movimento,
     Giacenza, Lotto, Articolo, Ubicazione, Fornitore,
 ]
+
+CAMPI_UTENTE = {
+    Movimento._meta.label_lower: ("eseguito_da",),
+    RegistroOperazione._meta.label_lower: ("utente",),
+    Produzione._meta.label_lower: ("moca_igienizzati_da",),
+    TankProduzione._meta.label_lower: ("annullato_da",),
+    BatchProduzione._meta.label_lower: ("registrato_da",),
+    CarrelloProduzione._meta.label_lower: ("registrato_da",),
+    NonConformitaLotto._meta.label_lower: ("aperta_da", "gestita_da"),
+}
 
 
 def crea_backup():
@@ -44,11 +59,11 @@ def crea_backup():
     for modello in MODELLI:
         queryset = modello.objects.all().order_by("pk")
         dati = json.loads(serializers.serialize("json", queryset))
-        if modello in {Movimento, RegistroOperazione}:
+        if modello._meta.label_lower in CAMPI_UTENTE:
             for record in dati:
-                campo = "eseguito_da" if modello is Movimento else "utente"
-                utente_id = record["fields"].get(campo)
-                record["fields"][campo] = utenti.get(utente_id)
+                for campo in CAMPI_UTENTE[modello._meta.label_lower]:
+                    utente_id = record["fields"].get(campo)
+                    record["fields"][campo] = utenti.get(utente_id)
         records.extend(dati)
         conteggi[modello._meta.label_lower] = len(dati)
 
@@ -79,17 +94,10 @@ def _prepara_backup(contenuto):
         get_user_model().objects.values_list("username", "pk")
     )
     for record in dati:
-        if record["model"] in {
-            Movimento._meta.label_lower,
-            RegistroOperazione._meta.label_lower,
-        }:
-            campo = (
-                "eseguito_da"
-                if record["model"] == Movimento._meta.label_lower
-                else "utente"
-            )
-            username = record["fields"].get(campo)
-            record["fields"][campo] = utenti.get(username)
+        if record["model"] in CAMPI_UTENTE:
+            for campo in CAMPI_UTENTE[record["model"]]:
+                username = record["fields"].get(campo)
+                record["fields"][campo] = utenti.get(username)
     try:
         oggetti = list(serializers.deserialize("json", json.dumps(dati)))
     except Exception as errore:

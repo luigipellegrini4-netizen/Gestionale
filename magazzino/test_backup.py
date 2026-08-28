@@ -8,7 +8,10 @@ from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from .backup_db import crea_backup, ripristina_backup
-from .models import Articolo, Fornitore, Giacenza, Lotto, Movimento, Ubicazione
+from .models import (
+    Articolo, BatchProduzione, CarrelloProduzione, Fornitore, Giacenza,
+    Lotto, Movimento, Produzione, TankProduzione, Ubicazione,
+)
 
 
 class BackupDatabaseTests(TestCase):
@@ -106,3 +109,37 @@ class BackupDatabaseTests(TestCase):
             ripristina_backup(b'{"formato":"ALTRO","versione":1,"dati":[]}')
 
         self.assertTrue(Fornitore.objects.filter(codice="FOR-BACKUP").exists())
+
+    def test_round_trip_include_batch_carrelli_e_collegamento_tank(self):
+        prodotto = Articolo.objects.create(
+            codice="PF-BACKUP", descrizione="Prodotto backup",
+            categoria=Articolo.Categoria.PRODOTTO_FINITO,
+            unita_misura=Articolo.UnitaMisura.PZ,
+        )
+        produzione = Produzione.objects.create(
+            articolo=prodotto, data_produzione="2026-08-28",
+            numero_batch_previsti=1, lotto_provvisorio="260829",
+        )
+        tank = TankProduzione.objects.create(
+            produzione=produzione, numero=1, numero_batch=1,
+            gradi_brix=Decimal("42"), ph=Decimal("4.0"),
+        )
+        BatchProduzione.objects.create(
+            produzione=produzione, tank=tank, numero=1,
+            ora_inizio="08:00", ora_fine="08:20",
+            esito_conformita="C", registrato_da=self.operatore,
+        )
+        CarrelloProduzione.objects.create(
+            produzione=produzione, tank=tank, numero=1,
+            numero_pezzi=500, esito_pastorizzazione="C",
+            registrato_da=self.operatore,
+        )
+        contenuto = crea_backup().encode("utf-8")
+
+        with TemporaryDirectory() as cartella, override_settings(BASE_DIR=cartella):
+            ripristina_backup(contenuto)
+
+        carrello = CarrelloProduzione.objects.select_related("tank", "registrato_da").get()
+        self.assertEqual(carrello.tank.numero, 1)
+        self.assertEqual(carrello.registrato_da.username, "backup-operatore")
+        self.assertEqual(BatchProduzione.objects.get().tank, carrello.tank)
