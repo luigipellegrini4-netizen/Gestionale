@@ -17,8 +17,61 @@ from .models import (
     NonConformitaLotto,
     Produzione,
     Ricetta,
+    RigaRicetta,
     Ubicazione,
 )
+
+
+class ClonazioneRicettaTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = get_user_model().objects.create_user(
+            username="ricetta-clone-test", password="password-di-test",
+        )
+        cls.user.user_permissions.add(
+            Permission.objects.get(codename="operare_magazzino")
+        )
+        cls.prodotto_base = Articolo.objects.create(
+            codice="PF-BASE", descrizione="Fragola",
+            categoria=Articolo.Categoria.PRODOTTO_FINITO,
+            unita_misura=Articolo.UnitaMisura.KG,
+        )
+        cls.prodotto_nuovo = Articolo.objects.create(
+            codice="PF-NUOVO", descrizione="Lampone",
+            categoria=Articolo.Categoria.PRODOTTO_FINITO,
+            unita_misura=Articolo.UnitaMisura.KG,
+        )
+        cls.ingrediente = Articolo.objects.create(
+            codice="ZUCCHERO-CLONE", descrizione="Zucchero",
+            categoria=Articolo.Categoria.MATERIA_PRIMA,
+            unita_misura=Articolo.UnitaMisura.KG,
+        )
+        cls.ricetta_base = Ricetta.objects.create(
+            articolo=cls.prodotto_base, nome="Ricetta fragola", attiva=True,
+        )
+        RigaRicetta.objects.create(
+            ricetta=cls.ricetta_base, articolo=cls.ingrediente,
+            quantita=Decimal("2.5"), note="Per un batch",
+        )
+
+    def test_nuova_ricetta_copia_righe_senza_modificare_originale(self):
+        self.client.force_login(self.user)
+        response = self.client.post(reverse("nuova_ricetta"), {
+            "tipo_prodotto": Articolo.Categoria.PRODOTTO_FINITO,
+            "articolo": self.prodotto_nuovo.pk,
+            "ricetta_base": self.ricetta_base.pk,
+            "nome": "Ricetta lampone",
+            "attiva": "on",
+            "note": "",
+        })
+        nuova = Ricetta.objects.get(articolo=self.prodotto_nuovo)
+        self.assertRedirects(response, reverse("dettaglio_ricetta", args=[nuova.pk]))
+        riga_copiata = nuova.righe.get()
+        self.assertEqual(riga_copiata.articolo, self.ingrediente)
+        self.assertEqual(riga_copiata.quantita, Decimal("2.5"))
+        riga_copiata.quantita = Decimal("3")
+        riga_copiata.save()
+        self.assertEqual(self.ricetta_base.righe.get().quantita, Decimal("2.5"))
 
 
 class SituazioneMagazzinoTests(TestCase):
@@ -199,13 +252,16 @@ class SituazioneMagazzinoTests(TestCase):
         response = self.client.get(reverse("situazione_magazzino"))
 
         articoli = list(response.context["articoli"])
-        self.assertEqual([a.pk for a in articoli], [self.imballo.pk, self.prodotto.pk])
+        self.assertEqual([a.pk for a in articoli], [self.prodotto.pk, self.imballo.pk])
 
         self.assertEqual(
             [gruppo["nome"] for gruppo in response.context["gruppi_articoli"]],
-            ["Packaging", "Prodotto finito"],
+            [
+                "Materia prima", "MOCA", "Semilavorato",
+                "Prodotto finito", "Igiene", "Consumabili",
+            ],
         )
-        self.assertContains(response, 'class="category-group-header"', count=2)
+        self.assertContains(response, 'class="category-group-header"', count=6)
 
     def test_articolo_rimanda_alla_scheda_e_ai_suoi_lotti(self):
         situazione = self.client.get(reverse("situazione_magazzino"))

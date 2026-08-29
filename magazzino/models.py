@@ -12,6 +12,7 @@ class Articolo(models.Model):
         IGIENE = "IGIENE", "Igiene"
         SEMILAVORATO = "SEMILAVORATO", "Semilavorato"
         PACKAGING = "PACKAGING", "Packaging"
+        CONSUMABILI = "CONSUMABILI", "Consumabili"
         PRODOTTO_FINITO = "PRODOTTO_FINITO", "Prodotto finito"
 
     class UnitaMisura(models.TextChoices):
@@ -95,6 +96,11 @@ class Articolo(models.Model):
 
     attivo = models.BooleanField(
         default=True,
+    )
+
+    tracciabilita_lotto = models.BooleanField(
+        default=True,
+        help_text="Se disattivata, MIRA genera un riferimento interno senza chiedere il lotto.",
     )
 
     note = models.TextField(
@@ -334,8 +340,14 @@ class Lotto(models.Model):
             return Decimal("1")
         return None
 
+    @property
+    def codice_visualizzato(self):
+        if not self.articolo.tracciabilita_lotto:
+            return "Non tracciato"
+        return self.codice_lotto
+
     def __str__(self):
-        return f"{self.articolo.codice} - {self.codice_lotto}"
+        return f"{self.articolo.codice} - {self.codice_visualizzato}"
 
     class Meta:
         constraints = [
@@ -762,6 +774,9 @@ class Produzione(models.Model):
         settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True,
         related_name="produzioni_moca_igienizzati",
     )
+    pezzi_difettosi_finali = models.PositiveIntegerField(default=0)
+    capsule_difettose_finali = models.PositiveIntegerField(default=0)
+    difetti_registrati_il = models.DateTimeField(null=True, blank=True)
 
     ubicazione_destinazione = models.ForeignKey(
         Ubicazione,
@@ -790,6 +805,18 @@ class Produzione(models.Model):
         null=True,
         blank=True,
     )
+    peso_netto_vasetto_g = models.DecimalField(
+        max_digits=10,
+        decimal_places=3,
+        null=True,
+        blank=True,
+    )
+    quantita_teorica_kg = models.DecimalField(
+        max_digits=12, decimal_places=3, null=True, blank=True,
+    )
+    resa_percentuale = models.DecimalField(
+        max_digits=7, decimal_places=2, null=True, blank=True,
+    )
 
     pastorizzazione_completata = models.BooleanField(default=False)
     vuoto_controllato = models.BooleanField(default=False)
@@ -801,6 +828,11 @@ class Produzione(models.Model):
     )
 
     class Meta:
+        permissions = [
+            ("operare_roboqubo", "Può registrare i cicli RoboQubo"),
+            ("operare_invasettamento", "Può registrare l'invasettamento"),
+            ("gestire_produzioni", "Può verificare e correggere le produzioni"),
+        ]
         constraints = [
             models.CheckConstraint(
                 condition=(
@@ -883,7 +915,7 @@ class TankProduzione(models.Model):
 
     @property
     def conforme(self):
-        return self.controllato and self.ph < 4.1 and 40 <= self.gradi_brix <= 45
+        return self.controllato and self.ph <= Decimal("4.10") and 40 <= self.gradi_brix <= 45
 
     def __str__(self):
         return f"Produzione {self.produzione_id} - Tank {self.numero}"
@@ -897,7 +929,7 @@ class EsitoControllo(models.TextChoices):
 
 class BatchProduzione(models.Model):
     produzione = models.ForeignKey(Produzione, on_delete=models.CASCADE, related_name="batch")
-    tank = models.ForeignKey(TankProduzione, on_delete=models.PROTECT, related_name="batch", null=True, blank=True)
+    tank = models.ForeignKey(TankProduzione, on_delete=models.CASCADE, related_name="batch", null=True, blank=True)
     numero = models.PositiveSmallIntegerField()
     ora_inizio = models.TimeField()
     ora_fine = models.TimeField()
@@ -915,12 +947,8 @@ class BatchProduzione(models.Model):
 
 class CarrelloProduzione(models.Model):
     produzione = models.ForeignKey(Produzione, on_delete=models.CASCADE, related_name="carrelli")
-    tank = models.ForeignKey(
-        TankProduzione, on_delete=models.PROTECT, related_name="carrelli",
-        null=True, blank=True,
-    )
     numero = models.PositiveSmallIntegerField()
-    numero_pezzi = models.PositiveIntegerField()
+    numero_pezzi = models.PositiveIntegerField(default=0)
     temperatura_pastorizzazione = models.DecimalField(max_digits=5, decimal_places=2, default=71)
     durata_pastorizzazione_minuti = models.PositiveSmallIntegerField(default=4)
     esito_pastorizzazione = models.CharField(max_length=2, choices=EsitoControllo.choices)
@@ -973,6 +1001,14 @@ class PrelievoProduzione(models.Model):
     quantita_prelevata = models.DecimalField(
         max_digits=12,
         decimal_places=6,
+    )
+    quantita_movimentata = models.DecimalField(
+        max_digits=12, decimal_places=6, null=True, blank=True,
+        help_text="Quantità fisicamente prelevata in UDA intere.",
+    )
+    quantita_resa_produzione = models.DecimalField(
+        max_digits=12, decimal_places=6, default=0,
+        help_text="Avanzo dell'UDA trasferito al Magazzino produzione.",
     )
 
     quantita_scarto = models.DecimalField(
@@ -1085,7 +1121,6 @@ class PrelievoProduzioneSemilavorato(models.Model):
         on_delete=models.PROTECT,
         related_name="prelievi_produzione_semilavorato",
     )
-
     scaffale_origine = models.CharField(max_length=30, blank=True)
     piano_origine = models.CharField(max_length=30, blank=True)
 

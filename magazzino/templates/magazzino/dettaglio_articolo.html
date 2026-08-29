@@ -70,6 +70,11 @@
             {{ articolo.unita_misura }}
         </div>
 
+        <div>
+            <strong>Tracciabilità per lotto</strong>
+            {% if articolo.tracciabilita_lotto %}Sì{% else %}No{% endif %}
+        </div>
+
         {% if articolo.quantita_per_confezione %}
 
             <div>
@@ -184,7 +189,7 @@
                             <td>
 
                                 <a href="{% url 'dettaglio_lotto' giacenza.lotto.pk %}">
-                                    {{ giacenza.lotto.codice_lotto }}
+                                    {{ giacenza.lotto.codice_visualizzato }}
                                 </a>
 
                             </td>
@@ -263,7 +268,7 @@
                             <td>
 
                                 <a href="{% url 'dettaglio_lotto' lotto.pk %}">
-                                    {{ lotto.codice_lotto }}
+                                    {{ lotto.codice_visualizzato }}
                                 </a>
 
                             </td>

@@ -31,16 +31,15 @@ Situazione magazzino - MIRA
 
 <h3>Giacenza complessiva per articolo</h3>
 
-{% if articoli %}
-    <div class="category-groups">
+<div class="category-groups">
     {% for gruppo in gruppi_articoli %}
-        <section class="category-group">
-            <div class="category-group-header">
-                <h4>{{ gruppo.nome }}</h4>
+        <details class="category-group">
+            <summary class="category-group-header">
+                <strong>{{ gruppo.nome }}</strong>
                 <span>{{ gruppo.righe|length }} articol{{ gruppo.righe|length|pluralize:"o,i" }}</span>
-            </div>
+            </summary>
             <div class="table-container">
-
+        {% if gruppo.righe %}
         <table>
 
             <thead>
@@ -87,29 +86,10 @@ Situazione magazzino - MIRA
             </tbody>
 
         </table>
-
+        {% else %}<p style="padding:1rem">Nessun articolo in questa sezione.</p>{% endif %}
             </div>
-        </section>
+        </details>
     {% endfor %}
-    </div>
-{% else %}
-
-        <p>
-            Non ci sono articoli presenti in anagrafica.
-        </p>
-
-{% endif %}
-
-{% if articoli.paginator.num_pages > 1 %}
-    <nav class="pagination" aria-label="Pagine articoli">
-        {% if articoli.has_previous %}
-            <a href="?articoli_page={{ articoli.previous_page_number }}">Precedente</a>
-        {% endif %}
-        <span>Pagina {{ articoli.number }} di {{ articoli.paginator.num_pages }}</span>
-        {% if articoli.has_next %}
-            <a href="?articoli_page={{ articoli.next_page_number }}">Successiva</a>
-        {% endif %}
-    </nav>
-{% endif %}
+</div>
 
 {% endblock %}

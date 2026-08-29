@@ -10,6 +10,9 @@ from .models import (
     Ricetta,
     RigaRicetta,
     TankProduzione,
+    Produzione,
+    BatchProduzione,
+    CarrelloProduzione,
     NonConformitaLotto,
 )
 
@@ -31,6 +34,8 @@ class CaricoLottoForm(forms.Form):
     codice_lotto = forms.CharField(
         max_length=50,
         label="Codice lotto",
+        required=False,
+        help_text="Obbligatorio solo per gli articoli con tracciabilità per lotto.",
     )
 
     fornitore = forms.ModelChoiceField(
@@ -153,6 +158,11 @@ class CaricoLottoForm(forms.Form):
         errori = []
         fattura = (cleaned_data.get("fattura") or "").strip()
         ddt = (cleaned_data.get("ddt") or "").strip()
+        articolo = cleaned_data.get("articolo")
+        codice_lotto = (cleaned_data.get("codice_lotto") or "").strip()
+        cleaned_data["codice_lotto"] = codice_lotto
+        if articolo is not None and articolo.tracciabilita_lotto and not codice_lotto:
+            self.add_error("codice_lotto", "Il codice lotto è obbligatorio per questo articolo.")
         cleaned_data["fattura"] = fattura
         cleaned_data["ddt"] = ddt
         if not fattura and not ddt:
@@ -669,12 +679,23 @@ class RicettaForm(forms.ModelForm):
         label="Prodotto",
     )
 
+    ricetta_base = forms.ModelChoiceField(
+        queryset=Ricetta.objects.select_related("articolo").order_by(
+            "articolo__descrizione", "-id",
+        ),
+        required=False,
+        label="Usa una ricetta come base",
+        empty_label="Nessuna: crea una ricetta vuota",
+        help_text="Gli ingredienti e i materiali saranno copiati e potranno essere modificati senza cambiare la ricetta originale.",
+    )
+
     class Meta:
         model = Ricetta
 
         fields = [
             "tipo_prodotto",
             "articolo",
+            "ricetta_base",
             "nome",
             "attiva",
             "note",
@@ -721,6 +742,7 @@ class RicettaForm(forms.ModelForm):
         self.fields["articolo"].queryset = queryset
 
         if self.instance.pk:
+            self.fields.pop("ricetta_base", None)
             self.fields["tipo_prodotto"].disabled = True
             self.fields["articolo"].disabled = True
 
@@ -848,13 +870,6 @@ class ProduzioneForm(forms.Form):
         help_text="Indica il totale previsto: può essere anche 15, 20, 30 o più.",
     )
 
-    lotto_provvisorio = forms.CharField(
-        required=False,
-        max_length=50,
-        label="Numero lotto provvisorio",
-        help_text="Se lasciato vuoto, MIRA propone il giorno successivo alla data di inizio.",
-    )
-
     note = forms.CharField(
         required=False,
         widget=forms.Textarea(
@@ -929,17 +944,18 @@ class AperturaTankForm(forms.Form):
 
 class ControlloTankForm(forms.Form):
     gradi_brix = forms.DecimalField(
-        min_value=0,
+        min_value=40,
+        max_value=45,
         max_digits=5,
         decimal_places=2,
-        label="Gradi Brix",
+        label="Gradi Brix (da 40 a 45, estremi inclusi)",
     )
     ph = forms.DecimalField(
         min_value=0,
-        max_value=14,
+        max_value=4.1,
         max_digits=4,
         decimal_places=2,
-        label="pH",
+        label="pH (massimo 4,1 incluso)",
     )
 
 
@@ -960,18 +976,7 @@ class BatchProduzioneForm(forms.Form):
         return dati
 
 
-class TankInvasettamentoChoiceField(forms.ModelChoiceField):
-    def label_from_instance(self, obj):
-        return f"Tank {obj.numero}"
-
-
 class CarrelloProduzioneForm(forms.Form):
-    tank = TankInvasettamentoChoiceField(
-        queryset=TankProduzione.objects.none(),
-        label="Tank da invasettare",
-        empty_label="Seleziona il tank",
-    )
-    numero_pezzi = forms.IntegerField(min_value=1, initial=500, label="Numero vasetti nel carrello")
     esito_pastorizzazione = forms.ChoiceField(
         label="2ª pastorizzazione: 71 °C × 4 minuti",
         choices=(("C", "C - Conforme"), ("NC", "NC - Non conforme"), ("NA", "NA - Non applicabile")),
@@ -981,12 +986,6 @@ class CarrelloProduzioneForm(forms.Form):
 
     def __init__(self, *args, produzione=None, **kwargs):
         super().__init__(*args, **kwargs)
-        if produzione is not None:
-            self.fields["tank"].queryset = produzione.tank.filter(
-                annullato=False, data_ora_controlli__isnull=False,
-                carrelli__isnull=True,
-            ).order_by("numero")
-
 
 class ChiusuraCarrelloForm(forms.Form):
     esito_shock_vuoto = forms.ChoiceField(
@@ -994,8 +993,6 @@ class ChiusuraCarrelloForm(forms.Form):
         choices=(("C", "C - Conforme"), ("NC", "NC - Non conforme"), ("NA", "NA - Non applicabile")),
         widget=forms.RadioSelect(attrs={"class": "control-options"}),
     )
-    pezzi_difettosi = forms.IntegerField(min_value=0, initial=0, label="N° pezzi difettosi")
-    capsule_difettose = forms.IntegerField(min_value=0, initial=0, label="N° capsule difettose")
     note_shock_vuoto = forms.CharField(required=False, label="Note shock termico / vuoto", widget=forms.Textarea(attrs={"rows": 2}))
 
 
@@ -1068,21 +1065,25 @@ class ScartoProduzioneForm(forms.Form):
 class ConfermaProduzioneForm(forms.Form):
     lotto_definitivo = forms.CharField(
         max_length=50, label="Numero lotto definitivo",
-        help_text="Conferma o modifica il numero provvisorio.",
+        help_text="Proposto automaticamente dalla data odierna; puoi modificarlo.",
     )
-    quantita_ottenuta_kg = forms.DecimalField(
-        max_digits=12,
+    lotto_proposto_originale = forms.CharField(required=False, widget=forms.HiddenInput)
+    quantita_prodotta = forms.IntegerField(
+        min_value=1,
+        label="Numero di vasetti prodotti buoni",
+    )
+    peso_netto_vasetto_g = forms.DecimalField(
+        max_digits=10,
         decimal_places=3,
         min_value=0.001,
-        label="Quantità effettiva ottenuta (kg)",
-        help_text="Peso netto disponibile per l'invasettamento.",
+        label="Peso netto del singolo vasetto (g)",
+        help_text="MIRA calcola: vasetti buoni × peso netto ÷ 1.000.",
     )
-
-    quantita_prodotta = forms.DecimalField(
-        max_digits=12,
-        decimal_places=3,
-        min_value=0.001,
-        label="Vasetti prodotti",
+    pezzi_difettosi_finali = forms.IntegerField(
+        min_value=0, initial=0, label="Numero di vasetti da scartare",
+    )
+    capsule_difettose_finali = forms.IntegerField(
+        min_value=0, initial=0, label="N° capsule difettose complessive",
     )
 
     note = forms.CharField(
@@ -1094,6 +1095,17 @@ class ConfermaProduzioneForm(forms.Form):
             },
         ),
     )
+
+    def clean(self):
+        dati = super().clean()
+        vasetti = dati.get("quantita_prodotta")
+        scarti = dati.get("pezzi_difettosi_finali")
+        peso = dati.get("peso_netto_vasetto_g")
+        if vasetti is not None and scarti is not None and peso is not None:
+            dati["quantita_ottenuta_kg"] = (
+                Decimal(vasetti + scarti) * peso / Decimal("1000")
+            )
+        return dati
 
 
 class ConfezionamentoForm(forms.Form):
@@ -1444,6 +1456,7 @@ class ArticoloForm(forms.ModelForm):
             "tipo_packaging",
             "pezzi_per_imballo",
             "attivo",
+            "tracciabilita_lotto",
             "note",
         ]
 
@@ -1460,6 +1473,7 @@ class ArticoloForm(forms.ModelForm):
             "tipo_packaging": "Tipo packaging",
             "pezzi_per_imballo": "Confezioni per imballo",
             "attivo": "Articolo attivo",
+            "tracciabilita_lotto": "Tracciabilità per lotto",
             "note": "Note",
         }
 
@@ -1558,6 +1572,166 @@ class ImportazioneCSVForm(forms.Form):
         if not file_csv.name.lower().endswith(".csv"):
             raise forms.ValidationError("Seleziona un file con estensione .csv.")
         return file_csv
+
+
+class ModificaProduzioneForm(forms.ModelForm):
+    class Meta:
+        model = Produzione
+        fields = ["data_produzione", "numero_batch_previsti", "lotto_provvisorio", "note"]
+        labels = {
+            "data_produzione": "Data di inizio produzione",
+            "numero_batch_previsti": "Numero batch previsti",
+            "lotto_provvisorio": "Lotto provvisorio",
+            "note": "Note preparazione",
+        }
+        widgets = {
+            "data_produzione": forms.DateInput(attrs={"type": "date"}),
+            "note": forms.Textarea(attrs={"rows": 3}),
+        }
+
+
+class ModificaBatchProduzioneForm(forms.ModelForm):
+    class Meta:
+        model = BatchProduzione
+        fields = [
+            "ora_inizio", "ora_fine", "temperatura_conformita",
+            "durata_conformita_secondi", "esito_conformita", "note",
+        ]
+        widgets = {
+            "ora_inizio": forms.TimeInput(attrs={"type": "time"}),
+            "ora_fine": forms.TimeInput(attrs={"type": "time"}),
+            "esito_conformita": forms.RadioSelect(attrs={"class": "control-options"}),
+            "note": forms.Textarea(attrs={"rows": 3}),
+        }
+
+    def clean(self):
+        dati = super().clean()
+        if dati.get("ora_inizio") and dati.get("ora_fine") and dati["ora_fine"] < dati["ora_inizio"]:
+            raise forms.ValidationError("L'ora di fine non può precedere l'ora di inizio.")
+        return dati
+
+
+class ModificaCarrelloProduzioneForm(forms.ModelForm):
+    pastorizzazione_registrata_il = forms.DateTimeField(
+        label="Data e ora seconda pastorizzazione",
+        widget=forms.DateTimeInput(attrs={"type": "datetime-local"}, format="%Y-%m-%dT%H:%M"),
+    )
+    shock_vuoto_registrato_il = forms.DateTimeField(
+        required=False,
+        label="Data e ora shock termico / vuoto",
+        widget=forms.DateTimeInput(attrs={"type": "datetime-local"}, format="%Y-%m-%dT%H:%M"),
+    )
+
+    class Meta:
+        model = CarrelloProduzione
+        fields = [
+            "temperatura_pastorizzazione", "durata_pastorizzazione_minuti",
+            "esito_pastorizzazione", "note_pastorizzazione",
+            "esito_shock_vuoto", "note_shock_vuoto",
+        ]
+        widgets = {
+            "esito_pastorizzazione": forms.RadioSelect(attrs={"class": "control-options"}),
+            "esito_shock_vuoto": forms.RadioSelect(attrs={"class": "control-options"}),
+            "note_pastorizzazione": forms.Textarea(attrs={"rows": 2}),
+            "note_shock_vuoto": forms.Textarea(attrs={"rows": 2}),
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["pastorizzazione_registrata_il"].initial = self.instance.pastorizzazione_registrata_il
+        self.fields["shock_vuoto_registrato_il"].initial = self.instance.shock_vuoto_registrato_il
+
+    def save(self, commit=True):
+        carrello = super().save(commit=False)
+        carrello.pastorizzazione_registrata_il = self.cleaned_data["pastorizzazione_registrata_il"]
+        carrello.shock_vuoto_registrato_il = self.cleaned_data["shock_vuoto_registrato_il"]
+        carrello.chiuso_il = carrello.shock_vuoto_registrato_il
+        if commit:
+            carrello.save()
+        return carrello
+
+
+class ModificaInvasettamentoProduzioneForm(forms.ModelForm):
+    moca_igienizzati_il = forms.DateTimeField(
+        required=False,
+        label="Data e ora pulizia / igienizzazione MOCA",
+        widget=forms.DateTimeInput(attrs={"type": "datetime-local"}, format="%Y-%m-%dT%H:%M"),
+    )
+
+    class Meta:
+        model = Produzione
+        fields = [
+            "moca_igienizzati", "pezzi_difettosi_finali",
+            "capsule_difettose_finali",
+        ]
+        labels = {
+            "moca_igienizzati": "Vasetti e capsule puliti e igienizzati",
+            "pezzi_difettosi_finali": "N° vasetti difettosi complessivi",
+            "capsule_difettose_finali": "N° capsule difettose complessive",
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["moca_igienizzati_il"].initial = self.instance.moca_igienizzati_il
+
+    def clean(self):
+        dati = super().clean()
+        if dati.get("moca_igienizzati") and not dati.get("moca_igienizzati_il"):
+            raise forms.ValidationError("Indica data e ora dell'igienizzazione MOCA.")
+        return dati
+
+    def save(self, commit=True):
+        produzione = super().save(commit=False)
+        produzione.moca_igienizzati_il = self.cleaned_data["moca_igienizzati_il"]
+        if commit:
+            produzione.save()
+        return produzione
+
+
+class ModificaRisultatoProduzioneForm(forms.Form):
+    lotto_definitivo = forms.CharField(max_length=50, label="Numero lotto definitivo")
+    quantita_prodotta = forms.IntegerField(
+        min_value=1, label="Numero di vasetti prodotti buoni",
+    )
+    peso_netto_vasetto_g = forms.DecimalField(
+        max_digits=10, decimal_places=3, min_value=Decimal("0.001"),
+        label="Peso netto del singolo vasetto (g)",
+    )
+    pezzi_difettosi_finali = forms.IntegerField(
+        min_value=0, label="Numero di vasetti da scartare",
+    )
+    capsule_difettose_finali = forms.IntegerField(
+        min_value=0, label="N° capsule difettose complessive",
+    )
+    note = forms.CharField(
+        required=False, label="Note", widget=forms.Textarea(attrs={"rows": 3}),
+    )
+
+    def __init__(self, *args, produzione=None, **kwargs):
+        self.produzione = produzione
+        if (
+            produzione is not None
+            and (not args or args[0] is None)
+            and "initial" not in kwargs
+        ):
+            kwargs["initial"] = {
+                "lotto_definitivo": produzione.lotto.codice_lotto if produzione.lotto else "",
+                "quantita_prodotta": produzione.quantita_prodotta,
+                "peso_netto_vasetto_g": produzione.peso_netto_vasetto_g,
+                "pezzi_difettosi_finali": produzione.pezzi_difettosi_finali,
+                "capsule_difettose_finali": produzione.capsule_difettose_finali,
+                "note": produzione.note,
+            }
+        super().__init__(*args, **kwargs)
+
+    def clean(self):
+        dati = super().clean()
+        vasetti = dati.get("quantita_prodotta")
+        scarti = dati.get("pezzi_difettosi_finali")
+        peso = dati.get("peso_netto_vasetto_g")
+        if vasetti is not None and scarti is not None and peso is not None:
+            dati["quantita_ottenuta_kg"] = Decimal(vasetti + scarti) * peso / Decimal("1000")
+        return dati
 
 
 class RipristinoBackupForm(forms.Form):

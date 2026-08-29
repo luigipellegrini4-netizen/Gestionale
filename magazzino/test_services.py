@@ -5,9 +5,11 @@ from django.contrib.auth import get_user_model
 from django.db import IntegrityError, transaction
 from django.test import TestCase
 from django.urls import reverse
+from django.utils import timezone
 
 from .models import (
     Articolo,
+    CarrelloProduzione,
     Confezionamento,
     Giacenza,
     Inscatolamento,
@@ -43,6 +45,7 @@ from .services import (
     registra_trasferimento,
     proponi_prelievi_articolo,
     modifica_tank_produzione,
+    modifica_risultato_produzione,
     annulla_tank_produzione,
     apri_non_conformita_lotto,
     gestisci_non_conformita_lotto,
@@ -192,6 +195,28 @@ class OperazioniMagazzinoTests(TestCase):
         self.assertEqual(lotto.numero_unita_acquisto_totali, 4)
         self.assertEqual(lotto.peso_unita_acquisto, Decimal("2.5"))
         self.assertEqual(lotto.ddt, "DDT-TEST-001")
+
+    def test_carico_non_tracciato_genera_riferimento_interno(self):
+        articolo = Articolo.objects.create(
+            codice="CONS-NO-LOTTO", descrizione="Guanti monouso",
+            categoria=Articolo.Categoria.CONSUMABILI,
+            unita_misura=Articolo.UnitaMisura.PZ,
+            tracciabilita_lotto=False,
+        )
+        lotto, _ = registra_carico_lotto(
+            articolo=articolo,
+            codice_lotto="",
+            fornitore=None,
+            quantita=Decimal("10"),
+            ubicazione=self.origine,
+            numero_colli=1,
+            unita_acquisto_per_collo=10,
+            peso_unita_acquisto=Decimal("1"),
+            ddt="DDT-NO-LOTTO",
+            data_arrivo=date(2026, 8, 29),
+        )
+        self.assertEqual(lotto.codice_lotto, "NT-260829-001")
+        self.assertEqual(lotto.codice_visualizzato, "Non tracciato")
 
     def test_carichi_stesso_articolo_possono_avere_strutture_diverse(self):
         lotto_a, _ = registra_carico_lotto(
@@ -569,6 +594,16 @@ class ConfermaProduzioneTests(TestCase):
             )
         tank = registra_controlli_tank(tank, gradi_brix="65", ph="3.20")
         self.assertIsNotNone(tank.data_ora_controlli)
+        produzione.moca_igienizzati = True
+        produzione.save(update_fields=["moca_igienizzati"])
+        CarrelloProduzione.objects.create(
+            produzione=produzione,
+            numero=1,
+            esito_pastorizzazione="C",
+            esito_shock_vuoto="C",
+            shock_vuoto_registrato_il=timezone.now(),
+            chiuso_il=timezone.now(),
+        )
 
         produzione_confermata = conferma_produzione(
             produzione=produzione,
@@ -597,6 +632,8 @@ class ConfermaProduzioneTests(TestCase):
             Lotto.Fase.INVASETTATO,
         )
         self.assertEqual(produzione_confermata.quantita_ottenuta_kg, Decimal("1"))
+        self.assertEqual(produzione_confermata.quantita_teorica_kg, Decimal("5"))
+        self.assertEqual(produzione_confermata.resa_percentuale, Decimal("20"))
         self.assertIsNotNone(produzione_confermata.data_ora_pastorizzazione)
         self.assertIsNotNone(produzione_confermata.data_ora_verifica_vuoto)
         self.assertEqual(
@@ -625,6 +662,66 @@ class ConfermaProduzioneTests(TestCase):
         self.assertEqual(
             response.context["tracciabilita_monte"][0]["quantita_scarto"],
             Decimal("0"),
+        )
+
+        modifica_risultato_produzione(
+            produzione_confermata,
+            lotto_definitivo="LOTTO-CORRETTO",
+            quantita_prodotta=5,
+            peso_netto_vasetto_g=250,
+            pezzi_difettosi_finali=2,
+            capsule_difettose_finali=1,
+            note="Correzione test",
+            operatore=self.user,
+        )
+        produzione_confermata.refresh_from_db()
+        produzione_confermata.lotto.refresh_from_db()
+        self.assertEqual(produzione_confermata.lotto.codice_lotto, "LOTTO-CORRETTO")
+        self.assertEqual(produzione_confermata.quantita_prodotta, Decimal("5"))
+        self.assertEqual(produzione_confermata.quantita_ottenuta_kg, Decimal("1.75"))
+        self.assertEqual(produzione_confermata.resa_percentuale, Decimal("35"))
+        self.assertEqual(
+            Giacenza.objects.get(lotto=produzione_confermata.lotto).quantita,
+            Decimal("5"),
+        )
+
+    def test_prelievo_arrotonda_a_uda_intere_e_deposita_avanzo_in_produzione(self):
+        Giacenza.objects.filter(lotto=self.lotto_ingrediente).update(quantita=0)
+        ubicazione_produzione = Ubicazione.objects.create(
+            nome="Magazzino produzione test",
+            tipo_magazzino=Ubicazione.TipoMagazzino.PRODUZIONE,
+        )
+        lotto = Lotto.objects.create(
+            articolo=self.ingrediente,
+            codice_lotto="ING-UDA-25",
+            tipo=Lotto.Tipo.ACQUISTO,
+            quantita_iniziale=Decimal("100"),
+            peso_unita_acquisto=Decimal("25"),
+        )
+        giacenza = Giacenza.objects.create(
+            lotto=lotto,
+            ubicazione=self.ubicazione_ingrediente,
+            quantita=Decimal("100"),
+        )
+        produzione = avvia_produzione(self.prodotto)
+
+        prelievi = registra_prelievi_produzione(
+            produzione=produzione,
+            articolo=self.ingrediente,
+            quantita_richiesta=Decimal("70"),
+        )
+
+        prelievo = next(p for p in prelievi if p.lotto_id == lotto.pk)
+        giacenza.refresh_from_db()
+        self.assertEqual(prelievo.quantita_prelevata, Decimal("70"))
+        self.assertEqual(prelievo.quantita_movimentata, Decimal("75"))
+        self.assertEqual(prelievo.quantita_resa_produzione, Decimal("5"))
+        self.assertEqual(giacenza.quantita, Decimal("25"))
+        self.assertEqual(
+            Giacenza.objects.get(
+                lotto=lotto, ubicazione=ubicazione_produzione,
+            ).quantita,
+            Decimal("5"),
         )
 
     def test_non_apre_un_secondo_tank_prima_dei_controlli(self):

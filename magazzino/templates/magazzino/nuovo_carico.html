@@ -42,4 +42,21 @@ Nuovo carico - MIRA
 
 </div>
 
+{{ articoli_non_tracciati|json_script:"articoli-non-tracciati" }}
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+    const articolo = document.getElementById("id_articolo");
+    const lotto = document.getElementById("id_codice_lotto");
+    const nonTracciati = new Set(JSON.parse(document.getElementById("articoli-non-tracciati").textContent).map(String));
+    function aggiornaLotto() {
+        const nascosto = nonTracciati.has(articolo.value);
+        lotto.required = !nascosto;
+        lotto.closest("p").style.display = nascosto ? "none" : "block";
+        if (nascosto) lotto.value = "";
+    }
+    articolo.addEventListener("change", aggiornaLotto);
+    aggiornaLotto();
+});
+</script>
+
 {% endblock %}

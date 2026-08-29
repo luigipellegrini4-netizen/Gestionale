@@ -114,15 +114,25 @@
 
                 <div class="menu-divider" role="separator"></div>
 
-                {% if perms.magazzino.operare_magazzino %}
+                {% if perms.magazzino.operare_roboqubo %}
                     <a href="{% url 'nuova_produzione' %}">
-                        Nuova produzione
+                        Nuovo RoboQubo
+                    </a>
+                {% endif %}
+                {% if perms.magazzino.operare_invasettamento %}
+                    <a href="{% url 'elenco_invasettamenti' %}">
+                        Invasettamento
                     </a>
                 {% endif %}
 
                 <a href="{% url 'elenco_produzioni' %}">
-                    Produzioni
+                    Registro produzioni
                 </a>
+                {% if perms.magazzino.gestire_produzioni %}
+                    <a href="{% url 'elenco_gestione_produzioni' %}">
+                        Gestione produzioni
+                    </a>
+                {% endif %}
 
                 <div class="menu-divider" role="separator"></div>
 

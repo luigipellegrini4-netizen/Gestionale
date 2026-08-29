@@ -1,0 +1,7 @@
+{% extends "magazzino/base.html" %}
+{% block title %}Gestione produzioni - MIRA{% endblock %}
+{% block content %}
+<div class="page-header"><div><h2>Gestione produzioni</h2><p>Area riservata alla verifica e alla correzione dei dati registrati.</p></div></div>
+<div class="card">{% if produzioni %}<table><thead><tr><th>Data</th><th>Prodotto</th><th>Lotto</th><th>Fase</th><th>Stato</th><th></th></tr></thead><tbody>{% for p in produzioni %}<tr><td>{{ p.data_produzione|date:"d/m/Y" }}</td><td>{{ p.articolo.nome_per_produzione }}</td><td>{% if p.lotto %}{{ p.lotto.codice_lotto }}{% else %}{{ p.lotto_provvisorio }}{% endif %}</td><td>{{ p.get_fase_display }}</td><td>{{ p.get_stato_display }}</td><td><a class="btn btn-secondary" href="{% url 'dettaglio_gestione_produzione' p.pk %}">Verifica e modifica</a></td></tr>{% endfor %}</tbody></table>{% else %}<p>Nessuna produzione registrata.</p>{% endif %}</div>
+{% include "magazzino/includes/pagination.html" %}
+{% endblock %}

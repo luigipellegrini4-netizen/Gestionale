@@ -3,9 +3,12 @@ from decimal import Decimal
 
 from django.test import TestCase
 
-from .forms import BatchProduzioneForm, CarrelloProduzioneForm, ProduzioneForm
-from .models import Articolo, BatchProduzione, CarrelloProduzione, Produzione, TankProduzione
-from .services import registra_controlli_tank
+from .forms import (
+    BatchProduzioneForm, CarrelloProduzioneForm,
+    ConfermaProduzioneForm, ProduzioneForm,
+)
+from .models import Articolo, BatchProduzione, CarrelloProduzione, Lotto, Produzione, TankProduzione
+from .services import genera_codice_lotto_produzione, registra_controlli_tank
 
 
 class FlussoProduzioneTreFasiTests(TestCase):
@@ -27,7 +30,7 @@ class FlussoProduzioneTreFasiTests(TestCase):
         self.assertEqual(self.produzione.numero_batch_previsti, 20)
         self.assertEqual(self.produzione.fase, Produzione.Fase.PREPARAZIONE)
 
-    def test_form_nuova_produzione_include_batch_e_lotto_provvisorio(self):
+    def test_form_nuova_produzione_include_batch_ma_non_chiede_lotto_provvisorio(self):
         form = ProduzioneForm(data={
             "articolo": self.articolo.pk,
             "data_produzione": "2026-08-28",
@@ -37,6 +40,7 @@ class FlussoProduzioneTreFasiTests(TestCase):
         })
         self.assertTrue(form.is_valid(), form.errors)
         self.assertEqual(form.cleaned_data["numero_batch_previsti"], 20)
+        self.assertNotIn("lotto_provvisorio", form.fields)
 
     def test_batch_conserva_parametri_ed_esito(self):
         batch = BatchProduzione.objects.create(
@@ -63,6 +67,14 @@ class FlussoProduzioneTreFasiTests(TestCase):
         tank.refresh_from_db()
         self.assertFalse(tank.conforme)
 
+    def test_limiti_brix_e_ph_includono_gli_estremi(self):
+        tank = TankProduzione.objects.create(
+            produzione=self.produzione, numero=1, numero_batch=1,
+        )
+        registra_controlli_tank(tank, Decimal("40"), Decimal("4.1"))
+        tank.refresh_from_db()
+        self.assertTrue(tank.conforme)
+
     def test_carrello_conserva_parametri_seconda_pastorizzazione(self):
         carrello = CarrelloProduzione.objects.create(
             produzione=self.produzione, numero=1, numero_pezzi=500,
@@ -84,26 +96,78 @@ class FlussoProduzioneTreFasiTests(TestCase):
         )
         registra_controlli_tank(tank, Decimal("42"), Decimal("4.0"))
         form = CarrelloProduzioneForm(data={
-            "tank": tank.pk, "numero_pezzi": 500, "esito_pastorizzazione": "NC",
+            "numero_pezzi": 500, "esito_pastorizzazione": "NC",
             "note_pastorizzazione": "Verifica qualità",
         }, produzione=self.produzione)
         self.assertTrue(form.is_valid())
 
-    def test_tendina_invasettamento_mostra_solo_tank_non_usati(self):
-        disponibile = TankProduzione.objects.create(
+    def test_conferma_calcola_peso_ottenuto_da_vasetti_buoni(self):
+        form = ConfermaProduzioneForm(data={
+            "lotto_definitivo": "260829",
+            "quantita_prodotta": 500,
+            "peso_netto_vasetto_g": "250",
+            "pezzi_difettosi_finali": 0,
+            "capsule_difettose_finali": 0,
+            "note": "",
+        })
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertEqual(form.cleaned_data["quantita_ottenuta_kg"], Decimal("125"))
+
+    def test_conferma_include_anche_i_vasetti_da_scartare_nel_peso(self):
+        form = ConfermaProduzioneForm(data={
+            "lotto_definitivo": "260829", "quantita_prodotta": 490,
+            "pezzi_difettosi_finali": 10, "capsule_difettose_finali": 2,
+            "peso_netto_vasetto_g": "250", "note": "",
+        })
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertEqual(form.cleaned_data["quantita_ottenuta_kg"], Decimal("125"))
+
+    def test_lotto_del_giorno_usa_prefissi_progressivi_per_lo_stesso_prodotto(self):
+        data_conferma = date(2026, 8, 29)
+        Lotto.objects.create(
+            articolo=self.articolo, codice_lotto="260829",
+            tipo=Lotto.Tipo.PRODUZIONE, quantita_iniziale=1,
+        )
+        self.assertEqual(
+            genera_codice_lotto_produzione(self.articolo, data_conferma),
+            "A260829",
+        )
+        Lotto.objects.create(
+            articolo=self.articolo, codice_lotto="A260829",
+            tipo=Lotto.Tipo.PRODUZIONE, quantita_iniziale=1,
+        )
+        self.assertEqual(
+            genera_codice_lotto_produzione(self.articolo, data_conferma),
+            "B260829",
+        )
+
+    def test_carrello_non_e_collegato_al_tank(self):
+        tank = TankProduzione.objects.create(
             produzione=self.produzione, numero=1, numero_batch=1,
         )
-        usato = TankProduzione.objects.create(
-            produzione=self.produzione, numero=2, numero_batch=1,
+        registra_controlli_tank(tank, Decimal("42"), Decimal("4.0"))
+        carrello = CarrelloProduzione.objects.create(
+            produzione=self.produzione, numero=1,
+            numero_pezzi=500, esito_pastorizzazione="C",
         )
-        registra_controlli_tank(disponibile, Decimal("42"), Decimal("4.0"))
-        registra_controlli_tank(usato, Decimal("43"), Decimal("3.9"))
+        self.assertFalse(hasattr(carrello, "tank"))
+        self.assertNotIn("tank", CarrelloProduzioneForm().fields)
+
+    def test_produzione_bozza_con_batch_e_carrello_puo_essere_eliminata(self):
+        tank = TankProduzione.objects.create(
+            produzione=self.produzione, numero=1, numero_batch=1,
+        )
+        BatchProduzione.objects.create(
+            produzione=self.produzione, tank=tank, numero=1,
+            ora_inizio=time(8), ora_fine=time(8, 20), esito_conformita="C",
+        )
         CarrelloProduzione.objects.create(
-            produzione=self.produzione, tank=usato, numero=1,
+            produzione=self.produzione, numero=1,
             numero_pezzi=500, esito_pastorizzazione="C",
         )
 
-        campo = CarrelloProduzioneForm(produzione=self.produzione).fields["tank"]
+        self.produzione.delete()
 
-        self.assertQuerySetEqual(campo.queryset, [disponibile])
-        self.assertEqual(campo.label_from_instance(disponibile), "Tank 1")
+        self.assertFalse(Produzione.objects.filter(pk=self.produzione.pk).exists())
+        self.assertFalse(BatchProduzione.objects.exists())
+        self.assertFalse(CarrelloProduzione.objects.exists())

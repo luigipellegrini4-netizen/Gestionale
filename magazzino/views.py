@@ -3,6 +3,7 @@ from decimal import Decimal, InvalidOperation
 
 from django.contrib import messages
 from django.contrib.auth.decorators import permission_required, user_passes_test
+from django.db import transaction
 from django.db.models import F, OuterRef, Q, Subquery, Sum
 from django.utils import timezone
 from django.core.paginator import Paginator
@@ -25,6 +26,11 @@ from .forms import (
     BatchProduzioneForm,
     CarrelloProduzioneForm,
     ChiusuraCarrelloForm,
+    ModificaProduzioneForm,
+    ModificaBatchProduzioneForm,
+    ModificaCarrelloProduzioneForm,
+    ModificaInvasettamentoProduzioneForm,
+    ModificaRisultatoProduzioneForm,
     ConfezionamentoForm,
     InscatolamentoForm,
     ProduzioneSemilavoratoForm,
@@ -56,6 +62,8 @@ from .services import (
     registra_verifica_vuoto,
     modifica_tank_produzione,
     annulla_tank_produzione,
+    genera_codice_lotto_produzione,
+    modifica_risultato_produzione,
     registra_confezionamento,
     registra_inscatolamento,
     registra_prelievi_semilavorato,
@@ -128,7 +136,7 @@ def nuovo_carico(request):
             else:
                 messages.success(
                     request,
-                    f"Lotto {lotto.codice_lotto} caricato correttamente.",
+                    f"Carico {lotto.codice_visualizzato} registrato correttamente.",
                 )
 
                 return redirect("nuovo_carico")
@@ -139,7 +147,13 @@ def nuovo_carico(request):
     return render(
         request,
         "magazzino/nuovo_carico.html",
-        {"form": form},
+        {
+            "form": form,
+            "articoli_non_tracciati": list(
+                Articolo.objects.filter(tracciabilita_lotto=False)
+                .values_list("pk", flat=True)
+            ),
+        },
     )
 
 
@@ -236,16 +250,8 @@ def disponibilita_trasferimento(request):
 
 
 def situazione_magazzino(request):
-    articoli = Paginator(
-        Articolo.objects.all().order_by(
-            "categoria",
-            "descrizione",
-            "codice",
-        ),
-        50,
-    ).get_page(request.GET.get("articoli_page"))
-    articoli.object_list = list(articoli.object_list)
-    articolo_ids = [articolo.pk for articolo in articoli.object_list]
+    articoli = list(Articolo.objects.all().order_by("descrizione", "codice"))
+    articolo_ids = [articolo.pk for articolo in articoli]
 
     totali_articolo = {
         riga["lotto__articolo_id"]: riga["totale"]
@@ -256,31 +262,31 @@ def situazione_magazzino(request):
         )
     }
 
-    for articolo in articoli.object_list:
+    for articolo in articoli:
         articolo.giacenza_totale = totali_articolo.get(
             articolo.pk,
             Decimal("0"),
         )
 
-    def raggruppa_per_categoria(elementi, articolo_da_elemento):
-        gruppi = []
-        for elemento in elementi:
-            articolo = articolo_da_elemento(elemento)
-            if not gruppi or gruppi[-1]["codice"] != articolo.categoria:
-                gruppi.append(
-                    {
-                        "codice": articolo.categoria,
-                        "nome": articolo.get_categoria_display(),
-                        "righe": [],
-                    }
-                )
-            gruppi[-1]["righe"].append(elemento)
-        return gruppi
-
-    gruppi_articoli = raggruppa_per_categoria(
-        articoli.object_list,
-        lambda articolo: articolo,
-    )
+    definizioni_gruppi = [
+        ("MATERIA_PRIMA", "Materia prima", {Articolo.Categoria.MATERIA_PRIMA}),
+        ("MOCA", "MOCA", {Articolo.Categoria.MOCA}),
+        ("SEMILAVORATO", "Semilavorato", {Articolo.Categoria.SEMILAVORATO}),
+        ("PRODOTTO_FINITO", "Prodotto finito", {Articolo.Categoria.PRODOTTO_FINITO}),
+        ("IGIENE", "Igiene", {Articolo.Categoria.IGIENE}),
+        (
+            "CONSUMABILI", "Consumabili",
+            {Articolo.Categoria.CONSUMABILI, Articolo.Categoria.PACKAGING},
+        ),
+    ]
+    gruppi_articoli = [
+        {
+            "codice": codice,
+            "nome": nome,
+            "righe": [articolo for articolo in articoli if articolo.categoria in categorie],
+        }
+        for codice, nome, categorie in definizioni_gruppi
+    ]
     return render(
         request,
         "magazzino/situazione_magazzino.html",
@@ -1390,11 +1396,32 @@ def nuova_ricetta(request):
         form = RicettaForm(request.POST)
 
         if form.is_valid():
-            ricetta = form.save()
+            ricetta_base = form.cleaned_data.get("ricetta_base")
+            with transaction.atomic():
+                ricetta = form.save()
+                righe_copiate = 0
+                if ricetta_base is not None:
+                    righe_base = list(ricetta_base.righe.all())
+                    RigaRicetta.objects.bulk_create([
+                        RigaRicetta(
+                            ricetta=ricetta,
+                            articolo=riga.articolo,
+                            quantita=riga.quantita,
+                            ingrediente_prodotto=riga.ingrediente_prodotto,
+                            note=riga.note,
+                        )
+                        for riga in righe_base
+                    ])
+                    righe_copiate = len(righe_base)
 
             messages.success(
                 request,
-                "Ricetta creata correttamente.",
+                (
+                    f"Ricetta creata copiando {righe_copiate} ingredienti da "
+                    f"{ricetta_base}. Ora puoi modificarli."
+                    if ricetta_base is not None
+                    else "Ricetta creata correttamente. Ora aggiungi gli ingredienti per 1 batch."
+                ),
             )
 
             return redirect(
@@ -1640,7 +1667,7 @@ def elenco_produzioni(request, tipo="produzione"):
             )
         )
 
-        titolo = "Produzioni marmellate"
+        titolo = "Registro produzioni"
         nuova_produzione_url = "nuova_produzione"
         gestione_url = "gestione_produzione"
         elimina_url = "elimina_produzione"
@@ -1664,7 +1691,18 @@ def elenco_produzioni(request, tipo="produzione"):
     )
 
 
-@permission_required("magazzino.operare_magazzino", raise_exception=True)
+@permission_required("magazzino.gestire_produzioni", raise_exception=True)
+def elenco_gestione_produzioni(request):
+    produzioni = Paginator(
+        Produzione.objects.select_related("articolo", "lotto")
+        .order_by("-data_produzione", "-id"),
+        50,
+    ).get_page(request.GET.get("page"))
+    return render(request, "magazzino/elenco_gestione_produzioni.html", {
+        "produzioni": produzioni, "page_obj": produzioni,
+    })
+
+@permission_required("magazzino.operare_roboqubo", raise_exception=True)
 def nuova_produzione(request):
     if request.method == "POST":
         form = ProduzioneForm(request.POST)
@@ -1701,10 +1739,9 @@ def nuova_produzione(request):
                         note=form.cleaned_data["note"],
                     )
                     produzione.numero_batch_previsti = form.cleaned_data["numero_batch_previsti"]
-                    produzione.lotto_provvisorio = (
-                        form.cleaned_data["lotto_provvisorio"].strip()
-                        or (form.cleaned_data["data_produzione"] + timedelta(days=1)).strftime("%y%m%d")
-                    )
+                    produzione.lotto_provvisorio = form.cleaned_data[
+                        "data_produzione"
+                    ].strftime("TEMP%y%m%d")
                     produzione.save(update_fields=["numero_batch_previsti", "lotto_provvisorio"])
 
                 except ValueError as errore:
@@ -1736,7 +1773,7 @@ def nuova_produzione(request):
     )
 
 
-@permission_required("magazzino.operare_magazzino", raise_exception=True)
+@permission_required("magazzino.gestire_produzioni", raise_exception=True)
 def modifica_tank(request, pk):
     tank = get_object_or_404(TankProduzione.objects.select_related("produzione"), pk=pk)
     if request.method == "POST":
@@ -1753,13 +1790,100 @@ def modifica_tank(request, pk):
                 form.add_error(None, str(errore))
             else:
                 messages.success(request, f"Tank {tank.numero} modificato correttamente.")
-                return redirect("gestione_produzione", pk=tank.produzione_id)
+                return redirect("dettaglio_gestione_produzione", pk=tank.produzione_id)
     else:
         form = ModificaTankForm(instance=tank)
     return render(request, "magazzino/modifica_tank.html", {"tank": tank, "form": form})
 
 
-@permission_required("magazzino.operare_magazzino", raise_exception=True)
+@permission_required("magazzino.gestire_produzioni", raise_exception=True)
+def modifica_produzione(request, pk):
+    produzione = get_object_or_404(Produzione.objects.select_related("articolo"), pk=pk)
+    form = ModificaProduzioneForm(request.POST or None, instance=produzione)
+    if request.method == "POST" and form.is_valid():
+        form.save()
+        messages.success(request, "Dati della preparazione modificati correttamente.")
+        return redirect("dettaglio_gestione_produzione", pk=produzione.pk)
+    return render(request, "magazzino/modifica_fase_produzione.html", {
+        "titolo": "Modifica preparazione", "produzione": produzione, "form": form,
+    })
+
+
+@permission_required("magazzino.gestire_produzioni", raise_exception=True)
+def modifica_batch_produzione(request, pk):
+    batch = get_object_or_404(BatchProduzione.objects.select_related("produzione"), pk=pk)
+    form = ModificaBatchProduzioneForm(request.POST or None, instance=batch)
+    if request.method == "POST" and form.is_valid():
+        form.save()
+        messages.success(request, f"Batch {batch.numero} modificato correttamente.")
+        return redirect("dettaglio_gestione_produzione", pk=batch.produzione_id)
+    return render(request, "magazzino/modifica_fase_produzione.html", {
+        "titolo": f"Modifica batch {batch.numero}",
+        "produzione": batch.produzione, "form": form,
+    })
+
+
+@permission_required("magazzino.gestire_produzioni", raise_exception=True)
+def modifica_carrello_produzione(request, pk):
+    carrello = get_object_or_404(CarrelloProduzione.objects.select_related("produzione"), pk=pk)
+    form = ModificaCarrelloProduzioneForm(request.POST or None, instance=carrello)
+    if request.method == "POST" and form.is_valid():
+        form.save()
+        messages.success(request, f"Carrello {carrello.numero} modificato correttamente.")
+        return redirect("dettaglio_gestione_produzione", pk=carrello.produzione_id)
+    return render(request, "magazzino/modifica_fase_produzione.html", {
+        "titolo": f"Modifica carrello {carrello.numero}",
+        "produzione": carrello.produzione, "form": form,
+    })
+
+
+@permission_required("magazzino.gestire_produzioni", raise_exception=True)
+def modifica_invasettamento_produzione(request, pk):
+    produzione = get_object_or_404(Produzione.objects.select_related("articolo"), pk=pk)
+    form = ModificaInvasettamentoProduzioneForm(request.POST or None, instance=produzione)
+    if request.method == "POST" and form.is_valid():
+        form.save()
+        messages.success(request, "Dati generali dell'invasettamento modificati correttamente.")
+        return redirect("dettaglio_gestione_produzione", pk=produzione.pk)
+    return render(request, "magazzino/modifica_fase_produzione.html", {
+        "titolo": "Modifica invasettamento", "produzione": produzione, "form": form,
+    })
+
+
+@permission_required("magazzino.gestire_produzioni", raise_exception=True)
+def modifica_risultato_produzione_view(request, pk):
+    produzione = get_object_or_404(
+        Produzione.objects.select_related("articolo", "lotto", "ubicazione_destinazione"),
+        pk=pk,
+    )
+    form = ModificaRisultatoProduzioneForm(
+        request.POST or None, produzione=produzione,
+    )
+    if request.method == "POST" and form.is_valid():
+        try:
+            modifica_risultato_produzione(
+                produzione=produzione,
+                lotto_definitivo=form.cleaned_data["lotto_definitivo"],
+                quantita_prodotta=form.cleaned_data["quantita_prodotta"],
+                peso_netto_vasetto_g=form.cleaned_data["peso_netto_vasetto_g"],
+                pezzi_difettosi_finali=form.cleaned_data["pezzi_difettosi_finali"],
+                capsule_difettose_finali=form.cleaned_data["capsule_difettose_finali"],
+                note=form.cleaned_data["note"],
+                operatore=request.user,
+            )
+        except ValueError as errore:
+            form.add_error(None, str(errore))
+        else:
+            messages.success(request, "Risultato finale della produzione modificato correttamente.")
+            return redirect("dettaglio_gestione_produzione", pk=produzione.pk)
+    return render(request, "magazzino/modifica_fase_produzione.html", {
+        "titolo": "Modifica risultato finale", "produzione": produzione, "form": form,
+        "mostra_quantita_calcolata": True,
+        "quantita_teorica_kg": produzione.quantita_teorica_kg,
+    })
+
+
+@permission_required("magazzino.operare_roboqubo", raise_exception=True)
 def annulla_tank(request, pk):
     tank = get_object_or_404(TankProduzione.objects.select_related("produzione"), pk=pk)
     if request.method == "POST":
@@ -1777,7 +1901,7 @@ def annulla_tank(request, pk):
     return render(request, "magazzino/annulla_tank.html", {"tank": tank, "form": form})
 
 
-@permission_required("magazzino.operare_magazzino", raise_exception=True)
+@permission_required("magazzino.operare_roboqubo", raise_exception=True)
 def gestione_produzione(request, pk):
     produzione = get_object_or_404(
         Produzione.objects
@@ -1804,12 +1928,16 @@ def gestione_produzione(request, pk):
         .first()
     )
 
-    conferma_form = ConfermaProduzioneForm(initial={"lotto_definitivo": produzione.lotto_provvisorio})
+    lotto_proposto = genera_codice_lotto_produzione(
+        produzione.articolo, timezone.localdate(),
+    )
+    conferma_form = ConfermaProduzioneForm(initial={
+        "lotto_definitivo": lotto_proposto,
+        "lotto_proposto_originale": lotto_proposto,
+    })
     apertura_tank_form = AperturaTankForm()
     controllo_tank_form = ControlloTankForm()
     batch_form = BatchProduzioneForm()
-    carrello_form = CarrelloProduzioneForm(produzione=produzione)
-    chiusura_carrello_form = ChiusuraCarrelloForm()
     tank_corrente = produzione.tank.filter(
         annullato=False,
         gradi_brix__isnull=True,
@@ -1877,46 +2005,6 @@ def gestione_produzione(request, pk):
             produzione.save(update_fields=["fase", "roboqubo_chiuso_il"])
             messages.success(request, "Fase RoboQubo conclusa.")
         return redirect(f"{produzione_url}#invasettamento")
-
-    if request.method == "POST" and request.POST.get("azione") == "conferma_moca":
-        produzione.moca_igienizzati = True
-        produzione.moca_igienizzati_il = timezone.now()
-        produzione.moca_igienizzati_da = request.user
-        produzione.save(update_fields=["moca_igienizzati", "moca_igienizzati_il", "moca_igienizzati_da"])
-        messages.success(request, "Pulizia e igienizzazione degli imballaggi MOCA registrata.")
-        return redirect("gestione_produzione", pk=produzione.pk)
-
-    if request.method == "POST" and request.POST.get("azione") == "apri_carrello":
-        carrello_form = CarrelloProduzioneForm(request.POST, produzione=produzione)
-        if not produzione.moca_igienizzati:
-            carrello_form.add_error(None, "Conferma prima pulizia e igienizzazione MOCA.")
-        elif carrello_form.is_valid():
-            CarrelloProduzione.objects.create(
-                produzione=produzione, numero=produzione.carrelli.count() + 1,
-                registrato_da=request.user, **carrello_form.cleaned_data,
-            )
-            messages.success(request, "Carrello e seconda pastorizzazione registrati.")
-            return redirect("gestione_produzione", pk=produzione.pk)
-
-    if request.method == "POST" and request.POST.get("azione") == "chiudi_carrello":
-        carrello = get_object_or_404(produzione.carrelli, pk=request.POST.get("carrello_id"), chiuso_il__isnull=True)
-        chiusura_carrello_form = ChiusuraCarrelloForm(request.POST)
-        if chiusura_carrello_form.is_valid():
-            for campo, valore in chiusura_carrello_form.cleaned_data.items():
-                setattr(carrello, campo, valore)
-            carrello.shock_vuoto_registrato_il = timezone.now()
-            carrello.chiuso_il = timezone.now()
-            carrello.save()
-            produzione.pastorizzazione_completata = True
-            produzione.vuoto_controllato = True
-            produzione.data_ora_pastorizzazione = carrello.pastorizzazione_registrata_il
-            produzione.data_ora_verifica_vuoto = carrello.shock_vuoto_registrato_il
-            produzione.save(update_fields=[
-                "pastorizzazione_completata", "vuoto_controllato",
-                "data_ora_pastorizzazione", "data_ora_verifica_vuoto",
-            ])
-            messages.success(request, f"Carrello {carrello.numero} chiuso correttamente.")
-            return redirect("gestione_produzione", pk=produzione.pk)
 
     if request.method == "POST" and request.POST.get("azione") == "apri_tank":
         apertura_tank_form = AperturaTankForm(request.POST)
@@ -2061,7 +2149,18 @@ def gestione_produzione(request, pk):
             )
 
         elif conferma_form.is_valid():
-            produzione.lotto_provvisorio = conferma_form.cleaned_data["lotto_definitivo"].strip()
+            codice_lotto = conferma_form.cleaned_data["lotto_definitivo"].strip()
+            if codice_lotto == conferma_form.cleaned_data["lotto_proposto_originale"]:
+                codice_lotto = genera_codice_lotto_produzione(
+                    produzione.articolo, timezone.localdate(),
+                )
+            if Lotto.objects.filter(
+                articolo=produzione.articolo, codice_lotto=codice_lotto,
+            ).exists():
+                codice_lotto = genera_codice_lotto_produzione(
+                    produzione.articolo, timezone.localdate(),
+                )
+            produzione.lotto_provvisorio = codice_lotto
             produzione.save(update_fields=["lotto_provvisorio"])
             prelievi_validi = produzione.prelievi.filter(
                 Q(tank__isnull=True) | Q(tank__annullato=False)
@@ -2093,6 +2192,9 @@ def gestione_produzione(request, pk):
                         ],
                         quantita_ottenuta_kg=conferma_form.cleaned_data[
                             "quantita_ottenuta_kg"
+                        ],
+                        peso_netto_vasetto_g=conferma_form.cleaned_data[
+                            "peso_netto_vasetto_g"
                         ],
                         note=conferma_form.cleaned_data[
                             "note"
@@ -2184,8 +2286,6 @@ def gestione_produzione(request, pk):
             "apertura_tank_form": apertura_tank_form,
             "controllo_tank_form": controllo_tank_form,
             "batch_form": batch_form,
-            "carrello_form": carrello_form,
-            "chiusura_carrello_form": chiusura_carrello_form,
             "batch_non_assegnati": produzione.batch.filter(tank__isnull=True),
             "batch_registrati": produzione.batch.select_related("tank").all(),
             "carrelli": produzione.carrelli.all(),
@@ -2199,17 +2299,39 @@ def gestione_produzione(request, pk):
     )
 
 
-@permission_required("magazzino.operare_magazzino", raise_exception=True)
+@permission_required("magazzino.operare_invasettamento", raise_exception=True)
+def elenco_invasettamenti(request):
+    produzioni = (
+        Produzione.objects.select_related("articolo", "lotto")
+        .prefetch_related("tank", "carrelli")
+        .filter(
+            stato=Produzione.Stato.BOZZA,
+            tank__annullato=False,
+            tank__data_ora_controlli__isnull=False,
+        )
+        .distinct()
+        .order_by("-data_produzione", "-id")
+    )
+    return render(request, "magazzino/elenco_invasettamenti.html", {
+        "produzioni": produzioni,
+    })
+
+
+@permission_required("magazzino.operare_invasettamento", raise_exception=True)
 def invasettamento_produzione(request, pk):
     produzione = get_object_or_404(
         Produzione.objects.select_related("articolo", "lotto", "moca_igienizzati_da")
-        .prefetch_related("tank__batch", "carrelli__tank"), pk=pk,
+        .prefetch_related("tank__batch", "carrelli"), pk=pk,
     )
     carrello_form = CarrelloProduzioneForm(produzione=produzione)
     chiusura_form = ChiusuraCarrelloForm()
-    conferma_form = ConfermaProduzioneForm(
-        initial={"lotto_definitivo": produzione.lotto_provvisorio},
+    lotto_proposto = genera_codice_lotto_produzione(
+        produzione.articolo, timezone.localdate(),
     )
+    conferma_form = ConfermaProduzioneForm(initial={
+        "lotto_definitivo": lotto_proposto,
+        "lotto_proposto_originale": lotto_proposto,
+    })
     url = reverse("invasettamento_produzione", kwargs={"pk": produzione.pk})
 
     if request.method == "POST" and request.POST.get("azione") == "conferma_moca":
@@ -2224,13 +2346,17 @@ def invasettamento_produzione(request, pk):
         carrello_form = CarrelloProduzioneForm(request.POST, produzione=produzione)
         if not produzione.moca_igienizzati:
             carrello_form.add_error(None, "Conferma prima pulizia e igienizzazione MOCA.")
+        elif not produzione.tank.filter(
+            annullato=False, data_ora_controlli__isnull=False,
+        ).exists():
+            carrello_form.add_error(None, "Non è ancora disponibile alcun tank controllato.")
         elif carrello_form.is_valid():
-            CarrelloProduzione.objects.create(
+            carrello = CarrelloProduzione.objects.create(
                 produzione=produzione, numero=produzione.carrelli.count() + 1,
                 registrato_da=request.user, **carrello_form.cleaned_data,
             )
             messages.success(request, "Pastorizzazione registrata. Completa shock termico e vuoto.")
-            return redirect(f"{url}#carrello-aperto")
+            return redirect(f"{url}#carrello-{carrello.pk}")
 
     if request.method == "POST" and request.POST.get("azione") == "chiudi_carrello":
         carrello = get_object_or_404(
@@ -2243,33 +2369,52 @@ def invasettamento_produzione(request, pk):
             carrello.shock_vuoto_registrato_il = timezone.now()
             carrello.chiuso_il = timezone.now()
             carrello.save()
-            produzione.pastorizzazione_completata = True
-            produzione.vuoto_controllato = True
-            produzione.data_ora_pastorizzazione = carrello.pastorizzazione_registrata_il
-            produzione.data_ora_verifica_vuoto = carrello.shock_vuoto_registrato_il
-            produzione.save(update_fields=[
-                "pastorizzazione_completata", "vuoto_controllato",
-                "data_ora_pastorizzazione", "data_ora_verifica_vuoto",
-            ])
-            messages.success(request, f"Carrello {carrello.numero} chiuso. Puoi aprire il successivo.")
-            return redirect(f"{url}#nuovo-carrello")
+            if not produzione.carrelli.filter(chiuso_il__isnull=True).exists():
+                produzione.vuoto_controllato = True
+                produzione.data_ora_verifica_vuoto = carrello.shock_vuoto_registrato_il
+                produzione.save(update_fields=["vuoto_controllato", "data_ora_verifica_vuoto"])
+            messages.success(
+                request,
+                f"Carrello {carrello.numero} completato. Puoi aprirne un altro oppure chiudere la lavorazione.",
+            )
+            return redirect(f"{url}#scelta-finale")
 
     if request.method == "POST" and request.POST.get("azione") == "conferma_produzione":
         conferma_form = ConfermaProduzioneForm(request.POST)
         if produzione.stato != Produzione.Stato.BOZZA:
             conferma_form.add_error(None, "La produzione è già stata confermata.")
-        elif produzione.fase != Produzione.Fase.INVASETTAMENTO:
-            conferma_form.add_error(None, "Concludi prima la fase RoboQubo.")
+        elif not produzione.carrelli.exists():
+            conferma_form.add_error(None, "Registra almeno un carrello.")
         elif conferma_form.is_valid():
-            produzione.lotto_provvisorio = conferma_form.cleaned_data["lotto_definitivo"].strip()
+            codice_lotto = conferma_form.cleaned_data["lotto_definitivo"].strip()
+            if codice_lotto == conferma_form.cleaned_data["lotto_proposto_originale"]:
+                codice_lotto = genera_codice_lotto_produzione(
+                    produzione.articolo, timezone.localdate(),
+                )
+            if Lotto.objects.filter(
+                articolo=produzione.articolo, codice_lotto=codice_lotto,
+            ).exists():
+                codice_lotto = genera_codice_lotto_produzione(
+                    produzione.articolo, timezone.localdate(),
+                )
+            produzione.lotto_provvisorio = codice_lotto
             produzione.save(update_fields=["lotto_provvisorio"])
             try:
                 produzione = conferma_produzione(
                     produzione=produzione,
                     quantita_prodotta=conferma_form.cleaned_data["quantita_prodotta"],
                     quantita_ottenuta_kg=conferma_form.cleaned_data["quantita_ottenuta_kg"],
+                    peso_netto_vasetto_g=conferma_form.cleaned_data[
+                        "peso_netto_vasetto_g"
+                    ],
                     note=conferma_form.cleaned_data["note"],
                     operatore=request.user,
+                    pezzi_difettosi_finali=conferma_form.cleaned_data[
+                        "pezzi_difettosi_finali"
+                    ],
+                    capsule_difettose_finali=conferma_form.cleaned_data[
+                        "capsule_difettose_finali"
+                    ],
                 )
             except ValueError as errore:
                 conferma_form.add_error(None, str(errore))
@@ -2282,16 +2427,21 @@ def invasettamento_produzione(request, pk):
 
     return render(request, "magazzino/invasettamento_produzione.html", {
         "produzione": produzione,
-        "tank_disponibili": produzione.tank.filter(
+        "tank_pronti": produzione.tank.filter(
             annullato=False,
             data_ora_controlli__isnull=False,
-            carrelli__isnull=True,
-        ).order_by("numero"),
+        ).count(),
         "carrelli": produzione.carrelli.all(),
         "carrelli_aperti": produzione.carrelli.filter(chiuso_il__isnull=True).exists(),
         "carrello_form": carrello_form,
         "chiusura_carrello_form": chiusura_form,
         "conferma_form": conferma_form,
+        "quantita_teorica_kg": produzione.prelievi.filter(
+            lotto__articolo__categoria__in=[
+                Articolo.Categoria.MATERIA_PRIMA,
+                Articolo.Categoria.SEMILAVORATO,
+            ],
+        ).aggregate(totale=Sum("quantita_prelevata"))["totale"] or Decimal("0"),
     })
 
 
@@ -2692,7 +2842,7 @@ def gestione_produzione_semilavorato(request, pk):
         },
     )
 
-@permission_required("magazzino.operare_magazzino", raise_exception=True)
+@permission_required("magazzino.gestire_produzioni", raise_exception=True)
 def elimina_produzione(request, pk):
     produzione = get_object_or_404(
         Produzione.objects.select_related("articolo", "lotto"),
@@ -2794,3 +2944,22 @@ def home(request):
             "limite_scadenza": limite_scadenza,
         },
     )
+
+
+@permission_required("magazzino.gestire_produzioni", raise_exception=True)
+def dettaglio_gestione_produzione(request, pk):
+    produzione = get_object_or_404(
+        Produzione.objects.select_related("articolo", "lotto", "ubicazione_destinazione")
+        .prefetch_related(
+            "prelievi__lotto__articolo", "prelievi__ubicazione_origine",
+            "batch__tank", "tank__batch", "carrelli",
+        ),
+        pk=pk,
+    )
+    return render(request, "magazzino/dettaglio_gestione_produzione.html", {
+        "produzione": produzione,
+        "prelievi": produzione.prelievi.all(),
+        "batch_registrati": produzione.batch.all(),
+        "tank": produzione.tank.all(),
+        "carrelli": produzione.carrelli.all(),
+    })

@@ -12,7 +12,7 @@
         <h2>{{ titolo }}</h2>
 
         <p>
-            Produzioni aperte e confermate.
+            Registro delle produzioni in lavorazione e completate.
         </p>
     </div>
 
@@ -85,21 +85,13 @@
                         </td>
 
                         <td>
-                            <a
-                                href="{% url gestione_url produzione.pk %}"
-                            >
+                            {% if tipo == "semilavorato" or perms.magazzino.operare_roboqubo %}<a href="{% url gestione_url produzione.pk %}">
                                 {% if produzione.stato == "BOZZA" %}
-                                    Gestisci
+                                    Apri ciclo di lavorazione
                                 {% else %}
                                     Dettaglio
                                 {% endif %}
-                            </a>
-                            {% if produzione.stato == "BOZZA" and perms.magazzino.operare_magazzino %}
-                                &nbsp;·&nbsp;
-                                <a href="{% url elimina_url produzione.pk %}">
-                                    Elimina
-                                </a>
-                            {% endif %}
+                            </a>{% else %}Solo consultazione{% endif %}
                         </td>
 
                     </tr>

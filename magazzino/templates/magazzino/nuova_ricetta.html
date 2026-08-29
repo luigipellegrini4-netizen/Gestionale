@@ -59,6 +59,13 @@ Nuova ricetta - MIRA
             {% endif %}
         </p>
 
+        <p>
+            {{ form.ricetta_base.label_tag }}
+            {{ form.ricetta_base }}
+            {% if form.ricetta_base.help_text %}<small>{{ form.ricetta_base.help_text }}</small>{% endif %}
+            {% if form.ricetta_base.errors %}{{ form.ricetta_base.errors }}{% endif %}
+        </p>
+
         <p><strong>Versione:</strong> assegnata automaticamente.</p>
 
         <p>

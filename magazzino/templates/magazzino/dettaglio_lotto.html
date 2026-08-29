@@ -1,7 +1,7 @@
 {% extends "magazzino/base.html" %}
 
 {% block title %}
-{{ lotto.codice_lotto }} - Dettaglio lotto
+{{ lotto.codice_visualizzato }} - Dettaglio lotto
 {% endblock %}
 
 {% block content %}
@@ -11,7 +11,7 @@
         <h2>Dettaglio lotto</h2>
         <p>
             {{ lotto.articolo.descrizione }}
-            — {{ lotto.codice_lotto }}
+            — {{ lotto.codice_visualizzato }}
         </p>
     </div>
     {% if perms.magazzino.operare_magazzino %}
@@ -37,7 +37,7 @@
 
         <div>
             <strong>Codice lotto</strong>
-            {{ lotto.codice_lotto }}
+            {{ lotto.codice_visualizzato }}
         </div>
 
         <div>
@@ -250,8 +250,20 @@
             {{ produzione.quantita_ottenuta_kg|default:"—" }}{% if produzione.quantita_ottenuta_kg %} kg{% endif %}
         </div>
         <div>
-            <strong>Vasetti prodotti</strong>
+            <strong>Quantità teorica iniziale</strong>
+            {{ produzione.quantita_teorica_kg|default:"—" }}{% if produzione.quantita_teorica_kg %} kg{% endif %}
+        </div>
+        <div>
+            <strong>Resa</strong>
+            {{ produzione.resa_percentuale|default:"—" }}{% if produzione.resa_percentuale %}%{% endif %}
+        </div>
+        <div>
+            <strong>Vasetti prodotti buoni</strong>
             {{ produzione.quantita_prodotta|default:"—" }}
+        </div>
+        <div>
+            <strong>Peso netto del vasetto</strong>
+            {{ produzione.peso_netto_vasetto_g|default:"—" }}{% if produzione.peso_netto_vasetto_g %} g{% endif %}
         </div>
         <div>
             <strong>Pastorizzazione</strong>

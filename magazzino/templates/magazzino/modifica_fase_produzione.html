@@ -1,0 +1,12 @@
+{% extends "magazzino/base.html" %}
+{% block title %}{{ titolo }} - MIRA{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div><h2>{{ titolo }}</h2><p>{{ produzione.articolo.codice }} - {{ produzione.articolo.descrizione }}</p></div>
+  <a class="btn btn-secondary" href="{% url 'dettaglio_gestione_produzione' produzione.pk %}">Torna alla gestione</a>
+</div>
+<div class="card">
+  <form method="post">{% csrf_token %}{{ form.as_p }}{% if mostra_quantita_calcolata %}<p><label>Quantità teorica (kg)</label><input id="quantita-teorica" type="text" readonly value="{{ quantita_teorica_kg }}"></p><p><label>Quantità effettiva ottenuta (kg)</label><input id="quantita-ottenuta-calcolata" type="text" readonly></p><p><label>Resa (%)</label><input id="resa-calcolata" type="text" readonly></p>{% endif %}<div class="form-actions"><button class="btn">Salva modifiche</button><a class="btn btn-secondary" href="{% url 'dettaglio_gestione_produzione' produzione.pk %}">Annulla</a></div></form>
+</div>
+{% if mostra_quantita_calcolata %}<script>document.addEventListener("DOMContentLoaded",function(){const n=document.getElementById("id_quantita_prodotta"),s=document.getElementById("id_pezzi_difettosi_finali"),p=document.getElementById("id_peso_netto_vasetto_g"),o=document.getElementById("quantita-ottenuta-calcolata"),r=document.getElementById("resa-calcolata"),t=parseFloat((document.getElementById("quantita-teorica").value||"").replace(",","."));function aggiorna(){const nv=parseFloat((n.value||"").replace(",",".")),sv=parseFloat((s.value||"").replace(",",".")),pv=parseFloat((p.value||"").replace(",","."));if(Number.isFinite(nv)&&Number.isFinite(sv)&&Number.isFinite(pv)){const eff=(nv+sv)*pv/1000;o.value=eff.toFixed(3);r.value=Number.isFinite(t)&&t>0?(eff/t*100).toFixed(2):"";}else{o.value="";r.value="";}}n.addEventListener("input",aggiorna);s.addEventListener("input",aggiorna);p.addEventListener("input",aggiorna);aggiorna();});</script>{% endif %}
+{% endblock %}

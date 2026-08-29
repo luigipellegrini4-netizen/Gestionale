@@ -71,4 +71,15 @@ Nuovo articolo
 
 </div>
 
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+    const categoria = document.getElementById("id_categoria");
+    const tracciabilita = document.getElementById("id_tracciabilita_lotto");
+    function proponiTracciabilita() {
+        tracciabilita.checked = !["IGIENE", "CONSUMABILI"].includes(categoria.value);
+    }
+    categoria.addEventListener("change", proponiTracciabilita);
+});
+</script>
+
 {% endblock %}

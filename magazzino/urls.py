@@ -146,6 +146,11 @@ urlpatterns = [
         },
         name="elenco_produzioni",
     ),
+    path(
+        "produzione/gestione/",
+        views.elenco_gestione_produzioni,
+        name="elenco_gestione_produzioni",
+    ),
 
     path(
         "produzione/nuova/",
@@ -159,9 +164,44 @@ urlpatterns = [
         name="gestione_produzione",
     ),
     path(
+        "produzione/<int:pk>/gestione/",
+        views.dettaglio_gestione_produzione,
+        name="dettaglio_gestione_produzione",
+    ),
+    path(
         "produzione/<int:pk>/invasettamento/",
         views.invasettamento_produzione,
         name="invasettamento_produzione",
+    ),
+    path(
+        "produzione/<int:pk>/modifica/",
+        views.modifica_produzione,
+        name="modifica_produzione",
+    ),
+    path(
+        "produzione/batch/<int:pk>/modifica/",
+        views.modifica_batch_produzione,
+        name="modifica_batch_produzione",
+    ),
+    path(
+        "produzione/carrello/<int:pk>/modifica/",
+        views.modifica_carrello_produzione,
+        name="modifica_carrello_produzione",
+    ),
+    path(
+        "produzione/<int:pk>/invasettamento/modifica/",
+        views.modifica_invasettamento_produzione,
+        name="modifica_invasettamento_produzione",
+    ),
+    path(
+        "produzione/<int:pk>/risultato/modifica/",
+        views.modifica_risultato_produzione_view,
+        name="modifica_risultato_produzione",
+    ),
+    path(
+        "produzione/invasettamento/",
+        views.elenco_invasettamenti,
+        name="elenco_invasettamenti",
     ),
     path(
         "produzione/<int:pk>/elimina/",

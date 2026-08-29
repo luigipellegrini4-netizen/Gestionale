@@ -110,7 +110,7 @@ class BackupDatabaseTests(TestCase):
 
         self.assertTrue(Fornitore.objects.filter(codice="FOR-BACKUP").exists())
 
-    def test_round_trip_include_batch_carrelli_e_collegamento_tank(self):
+    def test_round_trip_include_batch_e_carrelli_indipendenti(self):
         prodotto = Articolo.objects.create(
             codice="PF-BACKUP", descrizione="Prodotto backup",
             categoria=Articolo.Categoria.PRODOTTO_FINITO,
@@ -130,7 +130,7 @@ class BackupDatabaseTests(TestCase):
             esito_conformita="C", registrato_da=self.operatore,
         )
         CarrelloProduzione.objects.create(
-            produzione=produzione, tank=tank, numero=1,
+            produzione=produzione, numero=1,
             numero_pezzi=500, esito_pastorizzazione="C",
             registrato_da=self.operatore,
         )
@@ -139,7 +139,6 @@ class BackupDatabaseTests(TestCase):
         with TemporaryDirectory() as cartella, override_settings(BASE_DIR=cartella):
             ripristina_backup(contenuto)
 
-        carrello = CarrelloProduzione.objects.select_related("tank", "registrato_da").get()
-        self.assertEqual(carrello.tank.numero, 1)
+        carrello = CarrelloProduzione.objects.select_related("registrato_da").get()
         self.assertEqual(carrello.registrato_da.username, "backup-operatore")
-        self.assertEqual(BatchProduzione.objects.get().tank, carrello.tank)
+        self.assertEqual(BatchProduzione.objects.get().tank.numero, 1)

@@ -47,6 +47,26 @@ class CaricoLottoFormTests(TestCase):
 
         self.assertTrue(form.is_valid(), form.errors)
 
+    def test_lotto_rimane_obbligatorio_per_articolo_tracciato(self):
+        dati = self.dati_validi()
+        dati["codice_lotto"] = ""
+        form = CaricoLottoForm(data=dati)
+        self.assertFalse(form.is_valid())
+        self.assertIn("codice_lotto", form.errors)
+
+    def test_lotto_non_e_richiesto_per_articolo_non_tracciato(self):
+        articolo = Articolo.objects.create(
+            codice="IGIENE-NO-LOTTO", descrizione="Sapone",
+            categoria=Articolo.Categoria.IGIENE,
+            unita_misura=Articolo.UnitaMisura.PZ,
+            tracciabilita_lotto=False,
+        )
+        dati = self.dati_validi()
+        dati["articolo"] = articolo.pk
+        dati["codice_lotto"] = ""
+        form = CaricoLottoForm(data=dati)
+        self.assertTrue(form.is_valid(), form.errors)
+
     def test_fattura_soddisfa_il_requisito_del_documento(self):
         dati = self.dati_validi()
         dati["ddt"] = ""

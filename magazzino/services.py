@@ -1,4 +1,4 @@
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, ROUND_CEILING, ROUND_DOWN, ROUND_HALF_UP
 from datetime import date
 
 from django.db import transaction
@@ -85,6 +85,7 @@ def registra_carico_lotto(
     operatore=None,
 ):
     quantita = Decimal(str(quantita))
+    codice_lotto = (codice_lotto or "").strip()
     fattura = (fattura or "").strip()
     ddt = (ddt or "").strip()
     if quantita <= 0:
@@ -159,6 +160,18 @@ def registra_carico_lotto(
             )
     if not articolo.attivo:
         raise ValueError("L'articolo non è attivo.")
+    if articolo.tracciabilita_lotto and not codice_lotto:
+        raise ValueError("Il codice lotto è obbligatorio per questo articolo.")
+    if not articolo.tracciabilita_lotto and not codice_lotto:
+        data_riferimento = data_arrivo or date.today()
+        base = f"NT-{data_riferimento:%y%m%d}"
+        progressivo = 1
+        codice_lotto = f"{base}-{progressivo:03d}"
+        while Lotto.objects.filter(
+            articolo=articolo, codice_lotto=codice_lotto,
+        ).exists():
+            progressivo += 1
+            codice_lotto = f"{base}-{progressivo:03d}"
     if fornitore is not None and not fornitore.attivo:
         raise ValueError("Il fornitore non è attivo.")
     if not ubicazione.attiva:
@@ -737,6 +750,7 @@ def registra_prelievi_produzione(
     risultato = proponi_prelievi_articolo(
         articolo,
         quantita_richiesta,
+        rispetta_uda=True,
     )
 
     if not risultato["completa"]:
@@ -757,15 +771,17 @@ def registra_prelievi_produzione(
         )
 
         quantita_prelevata = riga["quantita_proposta"]
+        quantita_movimentata = riga.get("quantita_movimentata", quantita_prelevata)
+        quantita_resa = quantita_movimentata - quantita_prelevata
 
-        if giacenza.quantita < quantita_prelevata:
+        if giacenza.quantita < quantita_movimentata:
             raise ValueError(
                 f"La giacenza del lotto "
                 f"{giacenza.lotto.codice_lotto} è cambiata. "
                 "Ripetere la proposta di prelievo."
             )
 
-        giacenza.quantita -= quantita_prelevata
+        giacenza.quantita -= quantita_movimentata
         giacenza.save(update_fields=["quantita"])
 
         Movimento.objects.create(
@@ -781,6 +797,34 @@ def registra_prelievi_produzione(
             eseguito_da=operatore,
         )
 
+        if quantita_resa > 0:
+            ubicazione_produzione = Ubicazione.objects.filter(
+                tipo_magazzino=Ubicazione.TipoMagazzino.PRODUZIONE,
+                attiva=True,
+            ).order_by("id").first()
+            if ubicazione_produzione is None:
+                raise ValueError(
+                    "Non esiste un'ubicazione attiva di tipo Magazzino produzione "
+                    "per depositare l'avanzo dell'unità di acquisto."
+                )
+            giacenza_produzione, _ = Giacenza.objects.select_for_update().get_or_create(
+                lotto=giacenza.lotto, ubicazione=ubicazione_produzione,
+                scaffale="", piano="", defaults={"quantita": Decimal("0")},
+            )
+            giacenza_produzione.quantita += quantita_resa
+            giacenza_produzione.save(update_fields=["quantita"])
+            Movimento.objects.create(
+                tipo=Movimento.Tipo.TRASFERIMENTO,
+                lotto=giacenza.lotto, quantita=quantita_resa,
+                ubicazione_origine=giacenza.ubicazione,
+                ubicazione_destinazione=ubicazione_produzione,
+                scaffale_origine=giacenza.scaffale, piano_origine=giacenza.piano,
+                causale="Avanzo UDA trasferito al Magazzino produzione",
+                note=(f"Prelevati fisicamente {quantita_movimentata}; "
+                      f"utilizzati {quantita_prelevata}; avanzo {quantita_resa}."),
+                eseguito_da=operatore,
+            )
+
         prelievo = PrelievoProduzione.objects.create(
             produzione=produzione,
             tank=tank,
@@ -789,6 +833,8 @@ def registra_prelievi_produzione(
             scaffale_origine=giacenza.scaffale,
             piano_origine=giacenza.piano,
             quantita_prelevata=quantita_prelevata,
+            quantita_movimentata=quantita_movimentata,
+            quantita_resa_produzione=quantita_resa,
             quantita_scarto=None,
             note=note,
         )
@@ -942,6 +988,28 @@ def elimina_produzione_bozza(produzione, operatore=None):
         ).select_for_update()
     )
     for prelievo in prelievi:
+        quantita_movimentata = (
+            prelievo.quantita_movimentata or prelievo.quantita_prelevata
+        )
+        quantita_resa = prelievo.quantita_resa_produzione or Decimal("0")
+        if quantita_resa > 0:
+            ubicazione_produzione = Ubicazione.objects.filter(
+                tipo_magazzino=Ubicazione.TipoMagazzino.PRODUZIONE,
+                attiva=True,
+            ).order_by("id").first()
+            if ubicazione_produzione is None:
+                raise ValueError("Magazzino produzione non disponibile per annullare il prelievo.")
+            giacenza_produzione = Giacenza.objects.select_for_update().filter(
+                lotto=prelievo.lotto, ubicazione=ubicazione_produzione,
+                scaffale="", piano="",
+            ).first()
+            if giacenza_produzione is None or giacenza_produzione.quantita < quantita_resa:
+                raise ValueError(
+                    f"L'avanzo UDA del lotto {prelievo.lotto.codice_lotto} "
+                    "non è più disponibile nel Magazzino produzione."
+                )
+            giacenza_produzione.quantita -= quantita_resa
+            giacenza_produzione.save(update_fields=["quantita"])
         giacenza, _ = Giacenza.objects.select_for_update().get_or_create(
             lotto=prelievo.lotto,
             ubicazione=prelievo.ubicazione_origine,
@@ -949,12 +1017,12 @@ def elimina_produzione_bozza(produzione, operatore=None):
             piano=prelievo.piano_origine,
             defaults={"quantita": Decimal("0")},
         )
-        giacenza.quantita += prelievo.quantita_prelevata
+        giacenza.quantita += quantita_movimentata
         giacenza.save(update_fields=["quantita"])
         Movimento.objects.create(
             tipo=Movimento.Tipo.RETTIFICA,
             lotto=prelievo.lotto,
-            quantita=prelievo.quantita_prelevata,
+            quantita=quantita_movimentata,
             ubicazione_destinazione=prelievo.ubicazione_origine,
             causale="Annullamento produzione in bozza",
             note=f"Produzione annullata n. {produzione.pk}",
@@ -1033,6 +1101,9 @@ def conferma_produzione(
     operatore=None,
     pastorizzazione_completata=False,
     vuoto_controllato=False,
+    pezzi_difettosi_finali=0,
+    capsule_difettose_finali=0,
+    peso_netto_vasetto_g=None,
 ):
     if not isinstance(produzione, Produzione):
         raise ValueError("La produzione non è valida.")
@@ -1059,13 +1130,17 @@ def conferma_produzione(
     ).exists():
         raise ValueError("Completa i controlli Brix e pH di tutti i tank.")
 
-    if produzione.fase == Produzione.Fase.INVASETTAMENTO:
-        if not produzione.moca_igienizzati:
-            raise ValueError("Conferma pulizia e igienizzazione degli imballaggi MOCA.")
-        if not produzione.carrelli.exists():
-            raise ValueError("Registra almeno un carrello di invasettamento.")
-        if produzione.carrelli.filter(chiuso_il__isnull=True).exists():
-            raise ValueError("Chiudi tutti i carrelli prima di confermare la produzione.")
+    if not produzione.moca_igienizzati:
+        raise ValueError("Conferma pulizia e igienizzazione degli imballaggi MOCA.")
+    if not produzione.carrelli.exists():
+        raise ValueError("Registra almeno un carrello di invasettamento.")
+    if produzione.carrelli.filter(chiuso_il__isnull=True).exists():
+        raise ValueError("Completa tutti i carrelli prima di chiudere la lavorazione.")
+    ultimo_carrello = produzione.carrelli.order_by("-numero").first()
+    produzione.pastorizzazione_completata = True
+    produzione.vuoto_controllato = True
+    produzione.data_ora_pastorizzazione = ultimo_carrello.pastorizzazione_registrata_il
+    produzione.data_ora_verifica_vuoto = ultimo_carrello.shock_vuoto_registrato_il
 
     if pastorizzazione_completata and not produzione.pastorizzazione_completata:
         produzione.pastorizzazione_completata = True
@@ -1080,8 +1155,15 @@ def conferma_produzione(
         raise ValueError("Conferma il controllo del vuoto.")
 
     quantita_prodotta = Decimal(str(quantita_prodotta))
-    quantita_ottenuta_kg = Decimal(
-        str(quantita_ottenuta_kg if quantita_ottenuta_kg is not None else quantita_prodotta)
+    peso_netto_vasetto_g = (
+        Decimal(str(peso_netto_vasetto_g))
+        if peso_netto_vasetto_g is not None else None
+    )
+    vasetti_totali = quantita_prodotta + Decimal(str(pezzi_difettosi_finali))
+    quantita_ottenuta_kg = (
+        vasetti_totali * peso_netto_vasetto_g / Decimal("1000")
+        if peso_netto_vasetto_g is not None
+        else Decimal(str(quantita_ottenuta_kg or quantita_prodotta))
     )
 
     if quantita_prodotta <= 0:
@@ -1122,6 +1204,22 @@ def conferma_produzione(
 
     prelievi = list(
         prelievi_validi.select_related("lotto__articolo")
+    )
+    ingredienti_ids = set(
+        ricetta.righe.filter(ingrediente_prodotto=True)
+        .values_list("articolo_id", flat=True)
+    )
+    quantita_teorica_kg = sum(
+        (
+            prelievo.quantita_prelevata
+            for prelievo in prelievi
+            if prelievo.lotto.articolo_id in ingredienti_ids
+        ),
+        Decimal("0"),
+    )
+    resa_percentuale = (
+        quantita_ottenuta_kg / quantita_teorica_kg * Decimal("100")
+        if quantita_teorica_kg > 0 else None
     )
 
     utilizzo_per_articolo = {}
@@ -1191,7 +1289,7 @@ def conferma_produzione(
         )
     )
     for riga in materiali_moca:
-        quantita_moca = quantita_prodotta * riga.quantita
+        quantita_moca = vasetti_totali * riga.quantita
         prelievi_moca = registra_prelievi_produzione(
             produzione=produzione,
             articolo=riga.articolo,
@@ -1244,9 +1342,17 @@ def conferma_produzione(
     produzione.lotto = lotto
     produzione.quantita_prodotta = quantita_prodotta
     produzione.quantita_ottenuta_kg = quantita_ottenuta_kg
+    produzione.peso_netto_vasetto_g = peso_netto_vasetto_g
+    produzione.quantita_teorica_kg = quantita_teorica_kg
+    produzione.resa_percentuale = resa_percentuale
     produzione.fase = Produzione.Fase.COMPLETATA
+    if produzione.roboqubo_chiuso_il is None:
+        produzione.roboqubo_chiuso_il = timezone.now()
     produzione.ubicazione_destinazione = ubicazione_destinazione
     produzione.stato = Produzione.Stato.CONFERMATA
+    produzione.pezzi_difettosi_finali = pezzi_difettosi_finali
+    produzione.capsule_difettose_finali = capsule_difettose_finali
+    produzione.difetti_registrati_il = timezone.now()
 
     if note:
         produzione.note = note
@@ -1256,13 +1362,20 @@ def conferma_produzione(
             "lotto",
             "quantita_prodotta",
             "quantita_ottenuta_kg",
+            "peso_netto_vasetto_g",
+            "quantita_teorica_kg",
+            "resa_percentuale",
             "fase",
+            "roboqubo_chiuso_il",
             "ubicazione_destinazione",
             "stato",
             "pastorizzazione_completata",
             "vuoto_controllato",
             "data_ora_pastorizzazione",
             "data_ora_verifica_vuoto",
+            "pezzi_difettosi_finali",
+            "capsule_difettose_finali",
+            "difetti_registrati_il",
             "note",
         ]
     )
@@ -1713,6 +1826,7 @@ def registra_inscatolamento(
 def proponi_prelievi_articolo(
     articolo,
     quantita_richiesta,
+    rispetta_uda=False,
 ):
     quantita_richiesta = Decimal(str(quantita_richiesta))
 
@@ -1751,25 +1865,35 @@ def proponi_prelievi_articolo(
         )
     )
 
-    quantita_disponibile = sum(
-        (
-            giacenza.quantita
-            for giacenza in giacenze
-        ),
-        Decimal("0"),
-    )
-
     quantita_da_proporre = quantita_richiesta
     proposta = []
+    quantita_disponibile = Decimal("0")
 
     for giacenza in giacenze:
-        if quantita_da_proporre <= 0:
-            break
-
-        quantita_proposta = min(
-            giacenza.quantita,
-            quantita_da_proporre,
+        peso_uda = giacenza.lotto.quantita_singola_uda
+        arrotonda_uda = (
+            rispetta_uda
+            and peso_uda is not None
+            and peso_uda > 0
+            and giacenza.ubicazione.tipo_magazzino
+            != Ubicazione.TipoMagazzino.PRODUZIONE
         )
+        quantita_utilizzabile = giacenza.quantita
+        if arrotonda_uda:
+            quantita_utilizzabile = (
+                giacenza.quantita / peso_uda
+            ).to_integral_value(rounding=ROUND_DOWN) * peso_uda
+        quantita_disponibile += quantita_utilizzabile
+
+        if quantita_da_proporre <= 0 or quantita_utilizzabile <= 0:
+            continue
+
+        quantita_proposta = min(quantita_utilizzabile, quantita_da_proporre)
+        quantita_movimentata = quantita_proposta
+        if arrotonda_uda:
+            quantita_movimentata = (
+                quantita_proposta / peso_uda
+            ).to_integral_value(rounding=ROUND_CEILING) * peso_uda
 
         proposta.append(
             {
@@ -1778,6 +1902,8 @@ def proponi_prelievi_articolo(
                 "ubicazione": giacenza.ubicazione,
                 "disponibile": giacenza.quantita,
                 "quantita_proposta": quantita_proposta,
+                "quantita_movimentata": quantita_movimentata,
+                "quantita_resa_produzione": quantita_movimentata - quantita_proposta,
             }
         )
 
@@ -2125,4 +2251,82 @@ def conferma_produzione_semilavorato(
         ]
     )
 
+    return produzione
+
+
+@transaction.atomic
+def modifica_risultato_produzione(
+    produzione,
+    lotto_definitivo,
+    quantita_prodotta,
+    peso_netto_vasetto_g,
+    pezzi_difettosi_finali,
+    capsule_difettose_finali,
+    note="",
+    operatore=None,
+):
+    produzione = Produzione.objects.select_for_update().select_related(
+        "lotto", "ubicazione_destinazione",
+    ).get(pk=produzione.pk)
+    if produzione.stato != Produzione.Stato.CONFERMATA or produzione.lotto is None:
+        raise ValueError("È possibile modificare solo una produzione già confermata.")
+
+    lotto_definitivo = lotto_definitivo.strip()
+    if Lotto.objects.filter(
+        articolo=produzione.articolo, codice_lotto=lotto_definitivo,
+    ).exclude(pk=produzione.lotto_id).exists():
+        raise ValueError("Il numero lotto è già utilizzato per questo prodotto.")
+
+    nuova_quantita = Decimal(str(quantita_prodotta))
+    vecchia_quantita = produzione.quantita_prodotta or Decimal("0")
+    differenza = nuova_quantita - vecchia_quantita
+    giacenza = Giacenza.objects.select_for_update().filter(
+        lotto=produzione.lotto,
+        ubicazione=produzione.ubicazione_destinazione,
+        scaffale="", piano="",
+    ).first()
+    if giacenza is None:
+        raise ValueError("La giacenza originaria del lotto non è disponibile.")
+    if differenza < 0 and giacenza.quantita < -differenza:
+        raise ValueError(
+            "Non è possibile ridurre i vasetti: una parte della quantità è già stata "
+            "spostata o consumata. Riportala prima nell'ubicazione originaria."
+        )
+
+    if differenza:
+        giacenza.quantita += differenza
+        giacenza.save(update_fields=["quantita"])
+        Movimento.objects.create(
+            tipo=Movimento.Tipo.RETTIFICA,
+            lotto=produzione.lotto,
+            quantita=abs(differenza),
+            ubicazione_origine=(produzione.ubicazione_destinazione if differenza < 0 else None),
+            ubicazione_destinazione=(produzione.ubicazione_destinazione if differenza > 0 else None),
+            causale="Correzione quantità produzione confermata",
+            note=f"Da {vecchia_quantita} a {nuova_quantita} vasetti buoni. {note}".strip(),
+            eseguito_da=operatore,
+        )
+
+    produzione.lotto.codice_lotto = lotto_definitivo
+    produzione.lotto.quantita_iniziale = nuova_quantita
+    produzione.lotto.note = note
+    produzione.lotto.save(update_fields=["codice_lotto", "quantita_iniziale", "note"])
+    produzione.quantita_prodotta = nuova_quantita
+    produzione.peso_netto_vasetto_g = Decimal(str(peso_netto_vasetto_g))
+    vasetti_totali = nuova_quantita + Decimal(str(pezzi_difettosi_finali))
+    produzione.quantita_ottenuta_kg = (
+        vasetti_totali * produzione.peso_netto_vasetto_g / Decimal("1000")
+    )
+    produzione.resa_percentuale = (
+        produzione.quantita_ottenuta_kg / produzione.quantita_teorica_kg * Decimal("100")
+        if produzione.quantita_teorica_kg else None
+    )
+    produzione.pezzi_difettosi_finali = pezzi_difettosi_finali
+    produzione.capsule_difettose_finali = capsule_difettose_finali
+    produzione.note = note
+    produzione.save(update_fields=[
+        "quantita_prodotta", "peso_netto_vasetto_g", "quantita_ottenuta_kg",
+        "resa_percentuale",
+        "pezzi_difettosi_finali", "capsule_difettose_finali", "note",
+    ])
     return produzione

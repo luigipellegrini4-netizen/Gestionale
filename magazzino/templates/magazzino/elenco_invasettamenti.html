@@ -1,0 +1,10 @@
+{% extends "magazzino/base.html" %}
+{% block title %}Invasettamento - MIRA{% endblock %}
+{% block content %}
+<div class="page-header"><div><h2>Invasettamento</h2><p>Scegli una lavorazione che dispone di almeno un tank controllato.</p></div></div>
+<div class="card">
+{% if produzioni %}<table><thead><tr><th>Data</th><th>Prodotto</th><th>Lotto temporaneo</th><th>Tank controllati</th><th>Carrelli registrati</th><th></th></tr></thead><tbody>
+{% for p in produzioni %}<tr><td>{{ p.data_produzione|date:"d/m/Y" }}</td><td>{{ p.articolo.nome_per_produzione }}</td><td>{{ p.lotto_provvisorio }}</td><td>{{ p.tank.count }}</td><td>{{ p.carrelli.count }}</td><td><a class="btn" href="{% url 'invasettamento_produzione' p.pk %}">Apri invasettamento</a></td></tr>{% endfor %}
+</tbody></table>{% else %}<p>Nessuna produzione disponibile.</p>{% endif %}
+</div>
+{% endblock %}
