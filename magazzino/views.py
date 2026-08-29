@@ -4,7 +4,7 @@ from decimal import Decimal, InvalidOperation
 from django.contrib import messages
 from django.contrib.auth.decorators import permission_required, user_passes_test
 from django.db import transaction
-from django.db.models import F, OuterRef, Q, Subquery, Sum
+from django.db.models import Count, F, OuterRef, Q, Subquery, Sum
 from django.utils import timezone
 from django.core.paginator import Paginator
 from django.shortcuts import get_object_or_404, redirect, render
@@ -63,6 +63,8 @@ from .services import (
     modifica_tank_produzione,
     annulla_tank_produzione,
     genera_codice_lotto_produzione,
+    genera_codice_lotto_ripresa,
+    genera_codice_lotto_per_produzione,
     modifica_risultato_produzione,
     registra_confezionamento,
     registra_inscatolamento,
@@ -73,6 +75,12 @@ from .services import (
     elimina_produzione_semilavorato_bozza,
     apri_non_conformita_lotto,
     gestisci_non_conformita_lotto,
+    apri_non_conformita_batch,
+    risolvi_non_conformita_batch,
+    risolvi_nc_produzione_derivata,
+    conferma_lotto_parziale_produzione,
+    concludi_invasettamento_senza_nuovo_lotto,
+    calcola_quantita_teorica_ricetta,
 )
 
 from .models import (
@@ -92,10 +100,10 @@ from .models import (
     BatchProduzione,
     CarrelloProduzione,
     NonConformitaLotto,
+    MaterialeSospesoNonConformita,
 )
-
 from .csv_import import genera_template_csv, importa_csv
-from .backup_db import crea_backup, ripristina_backup
+from .backup_db import crea_backup, ripristina_backup, svuota_dati_magazzino
 from .audit import registra_operazione
 
 
@@ -502,14 +510,19 @@ def posizioni_lotto_non_conformita(request):
 
 def registro_non_conformita(request):
     queryset = NonConformitaLotto.objects.select_related(
-        "lotto__articolo", "aperta_da", "gestita_da"
+        "lotto__articolo", "produzione__articolo", "batch", "aperta_da", "gestita_da"
     )
     query = (request.GET.get("q") or "").strip()
     stato = request.GET.get("stato") or ""
     ambito = request.GET.get("ambito") or ""
     tipo_nc = request.GET.get("tipo_nc") or ""
     if query:
-        filtro = Q(motivo__icontains=query) | Q(decisione__icontains=query)
+        filtro = (
+            Q(motivo__icontains=query)
+            | Q(decisione__icontains=query)
+            | Q(lotto_temporaneo__icontains=query)
+            | Q(produzione__articolo__codice__icontains=query)
+        )
         if query.isdigit():
             filtro |= Q(pk=int(query))
         queryset = queryset.filter(filtro)
@@ -540,7 +553,8 @@ def registro_non_conformita(request):
 def dettaglio_non_conformita(request, pk):
     non_conformita = get_object_or_404(
         NonConformitaLotto.objects.select_related(
-            "lotto__articolo", "ubicazione_origine", "aperta_da", "gestita_da"
+            "lotto__articolo", "produzione__articolo", "batch",
+            "ubicazione_origine", "aperta_da", "gestita_da"
         ),
         pk=pk,
     )
@@ -592,7 +606,8 @@ def apri_non_conformita(request, pk):
 def gestisci_non_conformita(request, pk):
     non_conformita = get_object_or_404(
         NonConformitaLotto.objects.select_related(
-            "lotto__articolo", "ubicazione_origine", "aperta_da", "gestita_da"
+            "lotto__articolo", "produzione__articolo", "batch",
+            "ubicazione_origine", "aperta_da", "gestita_da"
         ),
         pk=pk,
     )
@@ -604,6 +619,16 @@ def gestisci_non_conformita(request, pk):
             request.POST, non_conformita=non_conformita
         )
         if form.is_valid():
+            oggi = timezone.localdate()
+            # Le date operative vengono registrate nel momento in cui il RQ
+            # compila o salva la gestione. La scadenza prevista resta invece
+            # sempre una scelta esplicita.
+            form.cleaned_data["data_inizio_gestione"] = (
+                form.cleaned_data.get("data_inizio_gestione") or oggi
+            )
+            form.cleaned_data["data_verifica"] = (
+                form.cleaned_data.get("data_verifica") or oggi
+            )
             for campo in (
                 "analisi_cause", "azione_risoluzione", "responsabile_azione",
                 "data_inizio_gestione", "azione_immediata", "scadenza_prevista",
@@ -624,7 +649,32 @@ def gestisci_non_conformita(request, pk):
                 )
             else:
                 try:
-                    if non_conformita.numero_uda_quarantena:
+                    if non_conformita.batch_id:
+                        decisioni_materiali = {}
+                        for materiale in non_conformita.materiali_sospesi.all():
+                            suffisso = form.chiavi_materiali.get(materiale.pk, str(materiale.pk))
+                            decisioni_materiali[materiale.pk] = {
+                                "esito": form.cleaned_data.get(f"materiale_esito_{suffisso}"),
+                                "nuova_data_scadenza": form.cleaned_data.get(
+                                    f"materiale_scadenza_{suffisso}", materiale.nuova_data_scadenza,
+                                ),
+                                "note": form.cleaned_data.get(f"materiale_note_{suffisso}"),
+                            }
+                        if non_conformita.produzioni_bloccate.exists():
+                            risolvi_nc_produzione_derivata(
+                                non_conformita=non_conformita,
+                                esito_batch=form.cleaned_data["esito_batch"],
+                                decisioni_materiali=decisioni_materiali,
+                                responsabile=request.user,
+                            )
+                        else:
+                            risolvi_non_conformita_batch(
+                                non_conformita=non_conformita,
+                                esito_batch=form.cleaned_data["esito_batch"],
+                                decisioni_materiali=decisioni_materiali,
+                                responsabile=request.user,
+                            )
+                    elif non_conformita.numero_uda_quarantena:
                         gestisci_non_conformita_lotto(
                             non_conformita=non_conformita,
                             numero_uda_scartate=form.cleaned_data["numero_uda_scartate"],
@@ -1252,6 +1302,30 @@ def template_csv(request, tipo):
 
 
 @user_passes_test(lambda user: user.is_superuser)
+def azzera_database_magazzino(request):
+    if request.method == "POST":
+        if request.POST.get("conferma", "").strip().upper() != "AZZERA":
+            messages.error(
+                request,
+                "Conferma non valida: scrivi esattamente AZZERA.",
+            )
+        else:
+            conteggi = svuota_dati_magazzino()
+            totale = sum(conteggi.values())
+            messages.success(
+                request,
+                f"Dati di magazzino azzerati: eliminati {totale} record. "
+                "Utenti, gruppi e permessi sono stati conservati.",
+            )
+            return redirect("home")
+
+    return render(
+        request,
+        "magazzino/azzera_database_magazzino.html",
+    )
+
+
+@user_passes_test(lambda user: user.is_superuser)
 def gestione_backup(request):
     form = RipristinoBackupForm(request.POST or None, request.FILES or None)
     risultato = None
@@ -1658,9 +1732,18 @@ def elenco_produzioni(request, tipo="produzione"):
                 "lotto",
                 "ubicazione_destinazione",
             )
-            .prefetch_related(
-                "prelievi",
+            .annotate(
+                tank_disponibili=Count(
+                    "tank",
+                    filter=Q(
+                        tank__annullato=False,
+                        tank__data_ora_controlli__isnull=False,
+                        tank__stato_invasettamento=TankProduzione.StatoInvasettamento.DISPONIBILE,
+                    ),
+                    distinct=True,
+                ),
             )
+            .prefetch_related("lotti_uscita__lotto")
             .order_by(
                 "-data_produzione",
                 "-id",
@@ -1742,7 +1825,10 @@ def nuova_produzione(request):
                     produzione.lotto_provvisorio = form.cleaned_data[
                         "data_produzione"
                     ].strftime("TEMP%y%m%d")
-                    produzione.save(update_fields=["numero_batch_previsti", "lotto_provvisorio"])
+                    produzione.quantita_teorica_kg = calcola_quantita_teorica_ricetta(produzione)
+                    produzione.save(update_fields=[
+                        "numero_batch_previsti", "lotto_provvisorio", "quantita_teorica_kg",
+                    ])
 
                 except ValueError as errore:
                     form.add_error(
@@ -1928,8 +2014,8 @@ def gestione_produzione(request, pk):
         .first()
     )
 
-    lotto_proposto = genera_codice_lotto_produzione(
-        produzione.articolo, timezone.localdate(),
+    lotto_proposto = genera_codice_lotto_per_produzione(
+        produzione, timezone.localdate(),
     )
     conferma_form = ConfermaProduzioneForm(initial={
         "lotto_definitivo": lotto_proposto,
@@ -1945,7 +2031,15 @@ def gestione_produzione(request, pk):
     produzione_url = reverse("gestione_produzione", kwargs={"pk": produzione.pk})
 
     if request.method == "POST" and request.POST.get("azione") == "chiudi_preparazione":
-        if produzione.fase != Produzione.Fase.PREPARAZIONE:
+        if (
+            produzione.bloccata_da_nc_id
+            and produzione.bloccata_da_nc.stato != NonConformitaLotto.Stato.CHIUSA
+        ):
+            messages.error(
+                request,
+                f"La produzione è bloccata dalla NC-{produzione.bloccata_da_nc_id}. Attendi la decisione del RQ.",
+            )
+        elif produzione.fase != Produzione.Fase.PREPARAZIONE:
             messages.error(request, "La preparazione è già stata chiusa.")
         elif ricetta is None:
             messages.error(request, "Il prodotto non ha una ricetta attiva.")
@@ -1963,21 +2057,83 @@ def gestione_produzione(request, pk):
 
     if request.method == "POST" and request.POST.get("azione") == "registra_batch":
         batch_form = BatchProduzioneForm(request.POST)
+        batch_pianificato = produzione.batch.filter(
+            stato=BatchProduzione.Stato.DA_LAVORARE,
+        ).order_by("numero").first()
         if produzione.fase != Produzione.Fase.ROBOQUBO:
             batch_form.add_error(None, "La produzione non è nella fase RoboQubo.")
-        elif produzione.batch.count() >= produzione.numero_batch_previsti:
+        elif produzione.stato_roboqubo not in {
+            Produzione.StatoRoboqubo.NORMALE,
+            Produzione.StatoRoboqubo.CON_NC,
+        }:
+            batch_form.add_error(None, "La fase RoboQubo non consente di registrare altri batch.")
+        elif (
+            batch_pianificato is None
+            and produzione.batch.exclude(stato=BatchProduzione.Stato.SCARTATO).count()
+            >= produzione.numero_batch_previsti
+        ):
             batch_form.add_error(None, "Sono già stati registrati tutti i batch previsti.")
         elif batch_form.is_valid():
-            BatchProduzione.objects.create(
-                produzione=produzione, numero=produzione.batch.count() + 1,
-                registrato_da=request.user, **batch_form.cleaned_data,
-            )
-            messages.success(request, "Batch registrato correttamente.")
-            return redirect(f"{produzione_url}#roboqubo")
+            puo_proseguire = batch_form.cleaned_data.pop("produzione_puo_proseguire", None)
+            try:
+                with transaction.atomic():
+                    if batch_pianificato is not None:
+                        batch = batch_pianificato
+                        for campo, valore in batch_form.cleaned_data.items():
+                            setattr(batch, campo, valore)
+                        batch.stato = BatchProduzione.Stato.CONFORME
+                        batch.registrato_da = request.user
+                        batch.registrato_il = timezone.now()
+                        batch.save(update_fields=[
+                            "ora_inizio", "ora_fine", "esito_conformita", "note",
+                            "stato", "registrato_da", "registrato_il",
+                        ])
+                    else:
+                        ultimo_numero = produzione.batch.order_by("-numero").values_list(
+                            "numero", flat=True,
+                        ).first() or 0
+                        ultimo_numero_nc = produzione.non_conformita.order_by(
+                            "-numero_batch_origine",
+                        ).values_list("numero_batch_origine", flat=True).first() or 0
+                        ultimo_numero = max(ultimo_numero, ultimo_numero_nc)
+                        batch = BatchProduzione.objects.create(
+                            produzione=produzione, numero=ultimo_numero + 1,
+                            registrato_da=request.user, **batch_form.cleaned_data,
+                        )
+                    nc = None
+                    if batch.esito_conformita == "NC":
+                        nc = apri_non_conformita_batch(
+                            batch=batch,
+                            produzione_puo_proseguire=(puo_proseguire == "SI"),
+                            motivo=batch.note or f"Tracciato di conformità NC del batch {batch.numero}",
+                            operatore=request.user,
+                        )
+            except ValueError as errore:
+                batch_form.add_error(None, str(errore))
+            else:
+                if nc is not None:
+                    messages.warning(
+                        request,
+                        (
+                            f"NC-{nc.pk} aperta. Il batch in quarantena è stato trasferito "
+                            "a una nuova produzione in bozza; questa produzione può proseguire."
+                            if puo_proseguire == "SI"
+                            else "I batch non ancora lavorati vengono trasferiti su una nuova produzione "
+                            "e le materie prime e i SL vengono trasferiti nel magazzino di produzione. "
+                            "La fase RoboQubo viene chiusa."
+                        ),
+                    )
+                else:
+                    messages.success(request, "Batch registrato correttamente.")
+                return redirect(f"{produzione_url}#roboqubo")
 
     if request.method == "POST" and request.POST.get("azione") == "crea_tank_da_batch":
         ids = request.POST.getlist("batch_ids")
-        batch_selezionati = produzione.batch.filter(pk__in=ids, tank__isnull=True)
+        batch_selezionati = produzione.batch.filter(
+            pk__in=ids,
+            tank__isnull=True,
+            stato__in=[BatchProduzione.Stato.CONFORME, BatchProduzione.Stato.REINTEGRATO],
+        )
         if produzione.tank.filter(annullato=False, data_ora_controlli__isnull=True).exists():
             messages.error(request, "Chiudi il tank aperto registrando pH e °Brix prima di crearne un altro.")
         elif not ids or batch_selezionati.count() != len(ids):
@@ -1993,17 +2149,56 @@ def gestione_produzione(request, pk):
         return redirect(f"{produzione_url}#controlli-tank")
 
     if request.method == "POST" and request.POST.get("azione") == "chiudi_roboqubo":
-        if produzione.batch.count() != produzione.numero_batch_previsti:
+        batch_da_assegnare = produzione.batch.filter(
+            tank__isnull=True,
+            stato__in=[BatchProduzione.Stato.CONFORME, BatchProduzione.Stato.REINTEGRATO],
+        )
+        batch_da_lavorare = produzione.batch.filter(
+            stato__in=[
+                BatchProduzione.Stato.DA_LAVORARE,
+                BatchProduzione.Stato.SOSPESO,
+                BatchProduzione.Stato.QUARANTENA,
+            ],
+        )
+        nc_aperte = produzione.non_conformita.exclude(
+            stato=NonConformitaLotto.Stato.CHIUSA,
+        )
+        if (
+            produzione.batch.exclude(stato=BatchProduzione.Stato.SCARTATO).count()
+            != produzione.numero_batch_previsti
+        ):
             messages.error(request, "Registra tutti i batch previsti prima di chiudere RoboQubo.")
-        elif produzione.batch.filter(tank__isnull=True).exists():
+        elif batch_da_lavorare.exists():
+            messages.error(request, "Ci sono ancora batch da lavorare o sospesi in questa produzione.")
+        elif batch_da_assegnare.exists():
             messages.error(request, "Tutti i batch devono essere collegati a un tank.")
         elif produzione.tank.filter(annullato=False, data_ora_controlli__isnull=True).exists():
             messages.error(request, "Registra pH e °Brix di tutti i tank.")
         else:
             produzione.fase = Produzione.Fase.INVASETTAMENTO
+            produzione.stato_roboqubo = Produzione.StatoRoboqubo.CONCLUSA
             produzione.roboqubo_chiuso_il = timezone.now()
-            produzione.save(update_fields=["fase", "roboqubo_chiuso_il"])
-            messages.success(request, "Fase RoboQubo conclusa.")
+            # Le NC dei batch sono state separate in produzioni derivate:
+            # non devono bloccare la chiusura dell'invasettamento originale.
+            if nc_aperte.filter(produzioni_bloccate__isnull=False).exists():
+                produzione.invasettamento_congelato = False
+                produzione.stato_invasettamento = (
+                    Produzione.StatoInvasettamento.IN_CORSO
+                    if produzione.moca_igienizzati or produzione.carrelli.exists()
+                    else Produzione.StatoInvasettamento.NON_AVVIATO
+                )
+            produzione.save(update_fields=[
+                "fase", "stato_roboqubo", "roboqubo_chiuso_il",
+                "invasettamento_congelato", "stato_invasettamento",
+            ])
+            if nc_aperte.exists():
+                messages.warning(
+                    request,
+                    "Fase RoboQubo conclusa. La NC resta aperta e prosegue separatamente "
+                    "sulla produzione derivata.",
+                )
+            else:
+                messages.success(request, "Fase RoboQubo conclusa.")
         return redirect(f"{produzione_url}#invasettamento")
 
     if request.method == "POST" and request.POST.get("azione") == "apri_tank":
@@ -2281,13 +2476,26 @@ def gestione_produzione(request, pk):
             "scarti_tank_mancanti": scarti_tank_mancanti,
             "tank_pronto_controlli": tank_pronto_controlli,
             "conferma_form": conferma_form,
-            "tank": produzione.tank.all(),
+            "tank": produzione.tank.filter(
+                stato_invasettamento=TankProduzione.StatoInvasettamento.DISPONIBILE,
+            ),
             "tank_corrente": tank_corrente,
             "apertura_tank_form": apertura_tank_form,
             "controllo_tank_form": controllo_tank_form,
             "batch_form": batch_form,
-            "batch_non_assegnati": produzione.batch.filter(tank__isnull=True),
-            "batch_registrati": produzione.batch.select_related("tank").all(),
+            "batch_non_assegnati": produzione.batch.filter(
+                tank__isnull=True,
+                stato__in=[BatchProduzione.Stato.CONFORME, BatchProduzione.Stato.REINTEGRATO],
+            ),
+            "batch_registrati": produzione.batch.select_related("tank").filter(
+                Q(tank__isnull=True)
+                | Q(tank__stato_invasettamento=TankProduzione.StatoInvasettamento.DISPONIBILE)
+            ),
+            "puo_registrare_batch": (
+                produzione.batch.filter(stato=BatchProduzione.Stato.DA_LAVORARE).exists()
+                or produzione.batch.exclude(stato=BatchProduzione.Stato.SCARTATO).count()
+                < produzione.numero_batch_previsti
+            ),
             "carrelli": produzione.carrelli.all(),
             "contenitore_formato": contenitore_formato,
             "formato_contenitore_kg": (
@@ -2303,11 +2511,34 @@ def gestione_produzione(request, pk):
 def elenco_invasettamenti(request):
     produzioni = (
         Produzione.objects.select_related("articolo", "lotto")
-        .prefetch_related("tank", "carrelli")
+        .annotate(
+            tank_disponibili=Count(
+                "tank",
+                filter=Q(
+                    tank__annullato=False,
+                    tank__data_ora_controlli__isnull=False,
+                    tank__stato_invasettamento=TankProduzione.StatoInvasettamento.DISPONIBILE,
+                ),
+                distinct=True,
+            ),
+            carrelli_correnti=Count(
+                "carrelli",
+                filter=Q(carrelli__lotto_uscita__isnull=True),
+                distinct=True,
+            ),
+        )
         .filter(
             stato=Produzione.Stato.BOZZA,
-            tank__annullato=False,
-            tank__data_ora_controlli__isnull=False,
+        )
+        .filter(
+            Q(tank_disponibili__gt=0)
+            | Q(
+                stato_invasettamento__in=[
+                    Produzione.StatoInvasettamento.IN_CORSO,
+                    Produzione.StatoInvasettamento.CONGELATO,
+                ],
+            )
+            | Q(carrelli_correnti__gt=0)
         )
         .distinct()
         .order_by("-data_produzione", "-id")
@@ -2323,23 +2554,61 @@ def invasettamento_produzione(request, pk):
         Produzione.objects.select_related("articolo", "lotto", "moca_igienizzati_da")
         .prefetch_related("tank__batch", "carrelli"), pk=pk,
     )
+    # Compatibilità con lavorazioni già chiuse in RoboQubo prima di questa
+    # correzione: se la NC vive in una produzione derivata, l'originale può
+    # terminare normalmente l'invasettamento.
+    if (
+        produzione.stato_roboqubo == Produzione.StatoRoboqubo.CONCLUSA
+        and produzione.invasettamento_congelato
+        and produzione.non_conformita.filter(
+            stato__in=[
+                NonConformitaLotto.Stato.APERTA,
+                NonConformitaLotto.Stato.IN_LAVORAZIONE,
+            ],
+            produzioni_bloccate__isnull=False,
+        ).exists()
+    ):
+        produzione.invasettamento_congelato = False
+        produzione.stato_invasettamento = (
+            Produzione.StatoInvasettamento.IN_CORSO
+            if produzione.moca_igienizzati or produzione.carrelli.exists()
+            else Produzione.StatoInvasettamento.NON_AVVIATO
+        )
+        produzione.save(update_fields=[
+            "invasettamento_congelato", "stato_invasettamento",
+        ])
     carrello_form = CarrelloProduzioneForm(produzione=produzione)
     chiusura_form = ChiusuraCarrelloForm()
-    lotto_proposto = genera_codice_lotto_produzione(
-        produzione.articolo, timezone.localdate(),
+    lotto_proposto = genera_codice_lotto_per_produzione(
+        produzione, timezone.localdate(),
     )
     conferma_form = ConfermaProduzioneForm(initial={
         "lotto_definitivo": lotto_proposto,
         "lotto_proposto_originale": lotto_proposto,
     })
     url = reverse("invasettamento_produzione", kwargs={"pk": produzione.pk})
+    tank_disponibili = produzione.tank.filter(
+        annullato=False,
+        data_ora_controlli__isnull=False,
+        stato_invasettamento=TankProduzione.StatoInvasettamento.DISPONIBILE,
+    ).prefetch_related("batch")
 
     if request.method == "POST" and request.POST.get("azione") == "conferma_moca":
-        produzione.moca_igienizzati = True
-        produzione.moca_igienizzati_il = timezone.now()
-        produzione.moca_igienizzati_da = request.user
-        produzione.save(update_fields=["moca_igienizzati", "moca_igienizzati_il", "moca_igienizzati_da"])
-        messages.success(request, "Igienizzazione MOCA registrata. Ora apri il primo carrello.")
+        if not tank_disponibili.exists():
+            messages.error(
+                request,
+                "L’invasettamento non può iniziare: RoboQubo non ha ancora reso disponibile un tank controllato.",
+            )
+        else:
+            produzione.moca_igienizzati = True
+            produzione.moca_igienizzati_il = timezone.now()
+            produzione.moca_igienizzati_da = request.user
+            produzione.stato_invasettamento = Produzione.StatoInvasettamento.IN_CORSO
+            produzione.save(update_fields=[
+                "moca_igienizzati", "moca_igienizzati_il", "moca_igienizzati_da",
+                "stato_invasettamento",
+            ])
+            messages.success(request, "Igienizzazione MOCA registrata. Ora apri il primo carrello.")
         return redirect(f"{url}#nuovo-carrello")
 
     if request.method == "POST" and request.POST.get("azione") == "apri_carrello":
@@ -2348,6 +2617,7 @@ def invasettamento_produzione(request, pk):
             carrello_form.add_error(None, "Conferma prima pulizia e igienizzazione MOCA.")
         elif not produzione.tank.filter(
             annullato=False, data_ora_controlli__isnull=False,
+            stato_invasettamento=TankProduzione.StatoInvasettamento.DISPONIBILE,
         ).exists():
             carrello_form.add_error(None, "Non è ancora disponibile alcun tank controllato.")
         elif carrello_form.is_valid():
@@ -2379,69 +2649,110 @@ def invasettamento_produzione(request, pk):
             )
             return redirect(f"{url}#scelta-finale")
 
+    if request.method == "POST" and request.POST.get("azione") == "concludi_senza_tank":
+        try:
+            produzione = concludi_invasettamento_senza_nuovo_lotto(produzione)
+        except ValueError as errore:
+            messages.error(request, str(errore))
+        else:
+            messages.success(
+                request,
+                "Invasettamento e produzione conclusi utilizzando i lotti già registrati.",
+            )
+            return redirect(f"{url}#produzione-conclusa")
+
     if request.method == "POST" and request.POST.get("azione") == "conferma_produzione":
         conferma_form = ConfermaProduzioneForm(request.POST)
         if produzione.stato != Produzione.Stato.BOZZA:
             conferma_form.add_error(None, "La produzione è già stata confermata.")
-        elif not produzione.carrelli.exists():
+        elif not produzione.carrelli.filter(lotto_uscita__isnull=True).exists():
             conferma_form.add_error(None, "Registra almeno un carrello.")
+        elif (
+            not produzione.invasettamento_congelato
+            and produzione.stato_roboqubo != Produzione.StatoRoboqubo.CONCLUSA
+        ):
+            conferma_form.add_error(
+                None,
+                "L’invasettamento può procedere, ma la produzione può essere chiusa "
+                "solo dopo la conclusione della fase RoboQubo.",
+            )
         elif conferma_form.is_valid():
             codice_lotto = conferma_form.cleaned_data["lotto_definitivo"].strip()
             if codice_lotto == conferma_form.cleaned_data["lotto_proposto_originale"]:
-                codice_lotto = genera_codice_lotto_produzione(
-                    produzione.articolo, timezone.localdate(),
+                codice_lotto = genera_codice_lotto_per_produzione(
+                    produzione, timezone.localdate(),
                 )
             if Lotto.objects.filter(
                 articolo=produzione.articolo, codice_lotto=codice_lotto,
             ).exists():
-                codice_lotto = genera_codice_lotto_produzione(
-                    produzione.articolo, timezone.localdate(),
+                codice_lotto = genera_codice_lotto_per_produzione(
+                    produzione, timezone.localdate(),
                 )
-            produzione.lotto_provvisorio = codice_lotto
-            produzione.save(update_fields=["lotto_provvisorio"])
-            try:
-                produzione = conferma_produzione(
-                    produzione=produzione,
-                    quantita_prodotta=conferma_form.cleaned_data["quantita_prodotta"],
-                    quantita_ottenuta_kg=conferma_form.cleaned_data["quantita_ottenuta_kg"],
-                    peso_netto_vasetto_g=conferma_form.cleaned_data[
-                        "peso_netto_vasetto_g"
-                    ],
-                    note=conferma_form.cleaned_data["note"],
-                    operatore=request.user,
-                    pezzi_difettosi_finali=conferma_form.cleaned_data[
-                        "pezzi_difettosi_finali"
-                    ],
-                    capsule_difettose_finali=conferma_form.cleaned_data[
-                        "capsule_difettose_finali"
-                    ],
-                )
-            except ValueError as errore:
-                conferma_form.add_error(None, str(errore))
+            if produzione.invasettamento_congelato:
+                try:
+                    uscita = conferma_lotto_parziale_produzione(
+                        produzione=produzione,
+                        codice_lotto=codice_lotto,
+                        quantita_prodotta=conferma_form.cleaned_data["quantita_prodotta"],
+                        peso_netto_vasetto_g=conferma_form.cleaned_data["peso_netto_vasetto_g"],
+                        pezzi_difettosi_finali=conferma_form.cleaned_data["pezzi_difettosi_finali"],
+                        capsule_difettose_finali=conferma_form.cleaned_data["capsule_difettose_finali"],
+                        note=conferma_form.cleaned_data["note"],
+                        operatore=request.user,
+                    )
+                except ValueError as errore:
+                    conferma_form.add_error(None, str(errore))
+                else:
+                    messages.success(
+                        request,
+                        f"Invasettamento chiuso: il lotto {uscita.lotto.codice_lotto} è definitivo. "
+                        "Nella lavorazione temporanea restano solo i batch in attesa del RQ.",
+                    )
+                    return redirect(f"{url}#lotti-definitivi")
             else:
-                messages.success(
-                    request,
-                    f"Produzione confermata e lotto {produzione.lotto.codice_lotto} creato.",
-                )
-                return redirect(f"{url}#produzione-conclusa")
+                produzione.lotto_provvisorio = codice_lotto
+                produzione.save(update_fields=["lotto_provvisorio"])
+                try:
+                    produzione = conferma_produzione(
+                        produzione=produzione,
+                        quantita_prodotta=conferma_form.cleaned_data["quantita_prodotta"],
+                        quantita_ottenuta_kg=conferma_form.cleaned_data["quantita_ottenuta_kg"],
+                        peso_netto_vasetto_g=conferma_form.cleaned_data[
+                            "peso_netto_vasetto_g"
+                        ],
+                        note=conferma_form.cleaned_data["note"],
+                        operatore=request.user,
+                        pezzi_difettosi_finali=conferma_form.cleaned_data[
+                            "pezzi_difettosi_finali"
+                        ],
+                        capsule_difettose_finali=conferma_form.cleaned_data[
+                            "capsule_difettose_finali"
+                        ],
+                    )
+                except ValueError as errore:
+                    conferma_form.add_error(None, str(errore))
+                else:
+                    messages.success(
+                        request,
+                        f"Produzione confermata e lotto {produzione.lotto.codice_lotto} creato.",
+                    )
+                    return redirect(f"{url}#produzione-conclusa")
+
+    quantita_teorica_corrente = calcola_quantita_teorica_ricetta(produzione)
 
     return render(request, "magazzino/invasettamento_produzione.html", {
         "produzione": produzione,
-        "tank_pronti": produzione.tank.filter(
-            annullato=False,
-            data_ora_controlli__isnull=False,
-        ).count(),
-        "carrelli": produzione.carrelli.all(),
-        "carrelli_aperti": produzione.carrelli.filter(chiuso_il__isnull=True).exists(),
+        "tank_pronti": tank_disponibili.count(),
+        "tank_disponibili": tank_disponibili,
+        "carrelli": produzione.carrelli.filter(lotto_uscita__isnull=True),
+        "carrelli_aperti": produzione.carrelli.filter(
+            chiuso_il__isnull=True, lotto_uscita__isnull=True,
+        ).exists(),
+        "lotti_uscita": produzione.lotti_uscita.select_related("lotto").all(),
         "carrello_form": carrello_form,
         "chiusura_carrello_form": chiusura_form,
         "conferma_form": conferma_form,
-        "quantita_teorica_kg": produzione.prelievi.filter(
-            lotto__articolo__categoria__in=[
-                Articolo.Categoria.MATERIA_PRIMA,
-                Articolo.Categoria.SEMILAVORATO,
-            ],
-        ).aggregate(totale=Sum("quantita_prelevata"))["totale"] or Decimal("0"),
+        "quantita_teorica_kg": quantita_teorica_corrente,
     })
 
 
@@ -2952,7 +3263,8 @@ def dettaglio_gestione_produzione(request, pk):
         Produzione.objects.select_related("articolo", "lotto", "ubicazione_destinazione")
         .prefetch_related(
             "prelievi__lotto__articolo", "prelievi__ubicazione_origine",
-            "batch__tank", "tank__batch", "carrelli",
+            "batch__tank", "tank__batch", "carrelli__lotto_uscita__lotto",
+            "lotti_uscita__lotto",
         ),
         pk=pk,
     )

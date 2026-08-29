@@ -14,9 +14,10 @@ from .models import (
     BatchProduzione,
     CarrelloProduzione,
     NonConformitaLotto,
+    MaterialeSospesoNonConformita,
 )
 
-from datetime import date
+from datetime import date, timedelta
 
 from decimal import Decimal, ROUND_HALF_UP
 
@@ -477,7 +478,8 @@ class GestioneNonConformitaLottoForm(forms.Form):
     data_inizio_gestione = forms.DateField(
         required=False,
         label="Data inizio gestione AC",
-        widget=forms.DateInput(attrs={"type": "date"}),
+        input_formats=["%Y-%m-%d"],
+        widget=forms.DateInput(format="%Y-%m-%d", attrs={"type": "date"}),
     )
     azione_immediata = forms.BooleanField(
         required=False,
@@ -491,7 +493,8 @@ class GestioneNonConformitaLottoForm(forms.Form):
         required=False,
         label="Tempi previsti: oppure entro il",
         help_text="Compilare questo campo in alternativa ad Azione immediata.",
-        widget=forms.DateInput(attrs={"type": "date"}),
+        input_formats=["%Y-%m-%d"],
+        widget=forms.DateInput(format="%Y-%m-%d", attrs={"type": "date"}),
     )
     numero_uda_scartate = forms.IntegerField(
         min_value=0,
@@ -521,12 +524,93 @@ class GestioneNonConformitaLottoForm(forms.Form):
     data_verifica = forms.DateField(
         required=False,
         label="Data verifica",
-        widget=forms.DateInput(attrs={"type": "date"}),
+        input_formats=["%Y-%m-%d"],
+        widget=forms.DateInput(format="%Y-%m-%d", attrs={"type": "date"}),
     )
 
     def __init__(self, *args, non_conformita, **kwargs):
         super().__init__(*args, **kwargs)
         self.non_conformita = non_conformita
+        if not self.is_bound:
+            oggi = date.today()
+            for nome_data in ("data_inizio_gestione", "data_verifica"):
+                if not self.initial.get(nome_data):
+                    self.initial[nome_data] = oggi
+        self.chiavi_materiali = {}
+        self.righe_materiali = []
+        self.campo_esito_batch = None
+        self.mostra_scadenza_materiali = not non_conformita.produzioni_bloccate.exists()
+        if non_conformita.batch_id:
+            self.fields["esito_batch"] = forms.ChoiceField(
+                required=False,
+                label=f"Decisione sul batch {non_conformita.batch.numero}",
+                choices=(("", "Seleziona"), ("SCARTA", "Scarta il batch"), ("REINTEGRA", "Reintegra il batch")),
+            )
+            materiali = list(non_conformita.materiali_sospesi.select_related(
+                "prelievo__lotto__articolo"
+            ))
+            primi_per_miscela = {}
+            for materiale in materiali:
+                if materiale.descrizione_miscela:
+                    primi_per_miscela.setdefault(materiale.descrizione_miscela, materiale.pk)
+            campi_aggiunti = set()
+            for materiale in materiali:
+                suffisso = str(
+                    primi_per_miscela.get(materiale.descrizione_miscela, materiale.pk)
+                    if materiale.descrizione_miscela else materiale.pk
+                )
+                self.chiavi_materiali[materiale.pk] = suffisso
+                if suffisso in campi_aggiunti:
+                    continue
+                campi_aggiunti.add(suffisso)
+                articolo = materiale.prelievo.lotto.articolo
+                etichetta_materiale = materiale.descrizione_miscela or f"{articolo.codice} — {articolo.descrizione}"
+                quantita_etichetta = materiale.quantita
+                if materiale.descrizione_miscela:
+                    quantita_etichetta = sum(
+                        (m.quantita for m in materiali if m.descrizione_miscela == materiale.descrizione_miscela),
+                        Decimal("0"),
+                    )
+                self.fields[f"materiale_esito_{suffisso}"] = forms.ChoiceField(
+                    required=False,
+                    label=f"{etichetta_materiale} ({quantita_etichetta} {articolo.unita_misura})",
+                    choices=(
+                        ("", "Seleziona"),
+                        (MaterialeSospesoNonConformita.Esito.RIUTILIZZA, "Reintegro"),
+                        (MaterialeSospesoNonConformita.Esito.SCARTA, "Scarto"),
+                    ),
+                    initial=materiale.esito,
+                )
+                if self.mostra_scadenza_materiali:
+                    self.fields[f"materiale_scadenza_{suffisso}"] = forms.DateField(
+                        required=False,
+                        label=f"Nuova scadenza {articolo.codice}",
+                        initial=date.today() + timedelta(days=7),
+                        widget=forms.DateInput(attrs={"type": "date"}),
+                    )
+                self.fields[f"materiale_note_{suffisso}"] = forms.CharField(
+                    required=False,
+                    label=f"Note {articolo.codice}",
+                    initial=materiale.note,
+                )
+                self.righe_materiali.append({
+                    "ingrediente": etichetta_materiale,
+                    "quantita": quantita_etichetta,
+                    "unita_misura": articolo.unita_misura,
+                    "decisione": self[f"materiale_esito_{suffisso}"],
+                    "scadenza": (
+                        self[f"materiale_scadenza_{suffisso}"]
+                        if self.mostra_scadenza_materiali else None
+                    ),
+                    "note": self[f"materiale_note_{suffisso}"],
+                })
+            self.campo_esito_batch = self["esito_batch"]
+        nomi_generali = (
+            "analisi_cause", "azione_risoluzione", "responsabile_azione",
+            "data_inizio_gestione", "azione_immediata", "scadenza_prevista",
+            "decisione", "esito_efficacia", "verifica_efficacia", "data_verifica",
+        )
+        self.campi_generali = [self[nome] for nome in nomi_generali]
 
     def clean(self):
         cleaned_data = super().clean()
@@ -547,6 +631,8 @@ class GestioneNonConformitaLottoForm(forms.Form):
                     "in quarantena."
                 )
         if self.data.get("azione") == "chiudi":
+            if self.non_conformita.batch_id and not cleaned_data.get("esito_batch"):
+                self.add_error("esito_batch", "Indicare la decisione sul batch non conforme.")
             obbligatori = {
                 "analisi_cause": "Compilare l'analisi delle cause.",
                 "azione_risoluzione": "Compilare l'azione intrapresa.",
@@ -968,11 +1054,24 @@ class BatchProduzioneForm(forms.Form):
         widget=forms.RadioSelect(attrs={"class": "control-options"}),
     )
     note = forms.CharField(required=False, label="Note", widget=forms.Textarea(attrs={"rows": 2}))
+    produzione_puo_proseguire = forms.ChoiceField(
+        required=False,
+        label="La produzione può proseguire con i batch successivi?",
+        choices=(("", "Seleziona"), ("SI", "Sì"), ("NO", "No, sospendi la fase RoboQubo")),
+        help_text="Obbligatorio quando il tracciato del batch è non conforme.",
+    )
 
     def clean(self):
         dati = super().clean()
         if dati.get("ora_inizio") and dati.get("ora_fine") and dati["ora_fine"] < dati["ora_inizio"]:
             raise forms.ValidationError("L'ora di fine non può precedere l'ora di inizio.")
+        if dati.get("esito_conformita") == "NC" and not dati.get("produzione_puo_proseguire"):
+            self.add_error(
+                "produzione_puo_proseguire",
+                "Indicare se la produzione può proseguire.",
+            )
+        if dati.get("esito_conformita") != "NC":
+            dati.pop("produzione_puo_proseguire", None)
         return dati
 
 

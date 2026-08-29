@@ -2,13 +2,15 @@ from datetime import date, time
 from decimal import Decimal
 
 from django.test import TestCase
+from django.contrib.auth import get_user_model
+from django.db.models import Sum
 
 from .forms import (
     BatchProduzioneForm, CarrelloProduzioneForm,
     ConfermaProduzioneForm, ProduzioneForm,
 )
-from .models import Articolo, BatchProduzione, CarrelloProduzione, Lotto, Produzione, TankProduzione
-from .services import genera_codice_lotto_produzione, registra_controlli_tank
+from .models import Articolo, BatchProduzione, CarrelloProduzione, Giacenza, Lotto, MaterialeSospesoNonConformita, Movimento, NonConformitaLotto, PrelievoProduzione, Produzione, Ricetta, RigaRicetta, TankProduzione, Ubicazione
+from .services import apri_non_conformita_batch, calcola_quantita_teorica_ricetta, genera_codice_lotto_per_produzione, genera_codice_lotto_produzione, genera_codice_lotto_ripresa, registra_controlli_tank, risolvi_non_conformita_batch, risolvi_nc_produzione_derivata
 
 
 class FlussoProduzioneTreFasiTests(TestCase):
@@ -19,8 +21,23 @@ class FlussoProduzioneTreFasiTests(TestCase):
             categoria=Articolo.Categoria.PRODOTTO_FINITO,
             unita_misura=Articolo.UnitaMisura.PZ,
         )
+        cls.ingrediente = Articolo.objects.create(
+            codice="MP-FLUSSO", descrizione="Ingrediente test flusso",
+            categoria=Articolo.Categoria.MATERIA_PRIMA,
+            unita_misura=Articolo.UnitaMisura.KG,
+        )
+        ricetta = Ricetta.objects.create(
+            articolo=cls.articolo, nome="Ricetta flusso", versione="1", attiva=True,
+        )
+        RigaRicetta.objects.create(
+            ricetta=ricetta, articolo=cls.ingrediente,
+            quantita=Decimal("10"), ingrediente_prodotto=True,
+        )
 
     def setUp(self):
+        self.operatore = get_user_model().objects.create_user(
+            username=f"operatore-{self._testMethodName}", password="test",
+        )
         self.produzione = Produzione.objects.create(
             articolo=self.articolo, data_produzione=date(2026, 8, 28),
             lotto_provvisorio="260829", numero_batch_previsti=20,
@@ -29,6 +46,9 @@ class FlussoProduzioneTreFasiTests(TestCase):
     def test_produzione_supporta_numero_elevato_di_batch(self):
         self.assertEqual(self.produzione.numero_batch_previsti, 20)
         self.assertEqual(self.produzione.fase, Produzione.Fase.PREPARAZIONE)
+        self.assertEqual(
+            calcola_quantita_teorica_ricetta(self.produzione), Decimal("200.000"),
+        )
 
     def test_form_nuova_produzione_include_batch_ma_non_chiede_lotto_provvisorio(self):
         form = ProduzioneForm(data={
@@ -90,6 +110,190 @@ class FlussoProduzioneTreFasiTests(TestCase):
         })
         self.assertFalse(form.is_valid())
 
+    def test_form_batch_nc_richiede_decisione_sul_proseguimento(self):
+        form = BatchProduzioneForm(data={
+            "ora_inizio": "10:00", "ora_fine": "10:20",
+            "esito_conformita": "NC", "note": "Fuori parametro",
+        })
+        self.assertFalse(form.is_valid())
+        self.assertIn("produzione_puo_proseguire", form.errors)
+
+    def test_batch_nc_viene_messo_in_quarantena_ed_escluso_dai_tank(self):
+        batch = BatchProduzione.objects.create(
+            produzione=self.produzione, numero=1, ora_inizio=time(8),
+            ora_fine=time(8, 20), esito_conformita="NC",
+        )
+        nc = apri_non_conformita_batch(batch, True, "Tracciato NC", self.operatore)
+        batch.refresh_from_db()
+        self.produzione.refresh_from_db()
+        self.assertEqual(batch.stato, BatchProduzione.Stato.QUARANTENA)
+        self.assertIsNone(batch.tank_id)
+        self.assertEqual(nc.lotto_temporaneo, "260829")
+        self.assertEqual(self.produzione.stato_roboqubo, Produzione.StatoRoboqubo.CON_NC)
+        self.assertTrue(self.produzione.invasettamento_congelato)
+        nuova = nc.produzioni_bloccate.get()
+        self.assertEqual(nuova.numero_batch_previsti, 1)
+        self.assertEqual(nuova.quantita_teorica_kg, Decimal("10.000"))
+        self.assertTrue(nuova.lotto_provvisorio.startswith("1TEMP"))
+        self.assertEqual(batch.produzione_id, nuova.pk)
+        self.assertEqual(self.produzione.numero_batch_previsti, 19)
+        self.assertEqual(self.produzione.quantita_teorica_kg, Decimal("190.000"))
+
+    def test_rq_reintegra_batch_e_sblocca_la_produzione(self):
+        batch = BatchProduzione.objects.create(
+            produzione=self.produzione, numero=1, ora_inizio=time(8),
+            ora_fine=time(8, 20), esito_conformita="NC",
+        )
+        nc = apri_non_conformita_batch(batch, True, "Tracciato NC", self.operatore)
+        risolvi_nc_produzione_derivata(nc, "REINTEGRA", {}, self.operatore)
+        batch.refresh_from_db()
+        self.produzione.refresh_from_db()
+        nc.refresh_from_db()
+        self.assertEqual(batch.stato, BatchProduzione.Stato.CONFORME)
+        self.assertEqual(nc.stato, NonConformitaLotto.Stato.CHIUSA)
+        self.assertFalse(self.produzione.invasettamento_congelato)
+
+    def test_rq_scarta_batch_senza_mantenere_gli_orari(self):
+        batch = BatchProduzione.objects.create(
+            produzione=self.produzione, numero=1, ora_inizio=time(8),
+            ora_fine=time(8, 20), esito_conformita="NC",
+        )
+        nc = apri_non_conformita_batch(batch, True, "Tracciato NC", self.operatore)
+        risolvi_nc_produzione_derivata(nc, "SCARTA", {}, self.operatore)
+        batch.refresh_from_db()
+        self.assertEqual(batch.stato, BatchProduzione.Stato.SCARTATO)
+        self.assertIsNone(batch.ora_inizio)
+        self.assertIsNone(batch.ora_fine)
+
+    def test_nc_che_blocca_crea_una_nuova_produzione_con_i_batch_residui(self):
+        Ubicazione.objects.create(
+            nome="Magazzino produzione test",
+            tipo_magazzino=Ubicazione.TipoMagazzino.PRODUZIONE,
+        )
+        BatchProduzione.objects.create(
+            produzione=self.produzione, numero=1, ora_inizio=time(8),
+            ora_fine=time(8, 20), esito_conformita="C",
+        )
+        batch_nc = BatchProduzione.objects.create(
+            produzione=self.produzione, numero=2, ora_inizio=time(8, 30),
+            ora_fine=time(8, 50), esito_conformita="NC",
+        )
+        nc = apri_non_conformita_batch(
+            batch_nc, False, "Blocco produzione", self.operatore,
+        )
+        nuova = nc.produzioni_bloccate.get()
+        self.produzione.refresh_from_db()
+        batch_nc.refresh_from_db()
+        self.assertEqual(self.produzione.fase, Produzione.Fase.INVASETTAMENTO)
+        self.assertEqual(self.produzione.numero_batch_previsti, 1)
+        self.assertEqual(nuova.numero_batch_previsti, 19)
+        self.assertEqual(nuova.quantita_teorica_kg, Decimal("190.000"))
+        self.assertEqual(self.produzione.quantita_teorica_kg, Decimal("10.000"))
+        self.assertTrue(nuova.lotto_provvisorio.startswith("1TEMP"))
+        self.assertEqual(nuova.bloccata_da_nc, nc)
+        self.assertEqual(batch_nc.produzione, nuova)
+        self.assertEqual(batch_nc.numero, 1)
+        self.assertEqual(nuova.batch.count(), 19)
+        self.assertEqual(
+            nuova.batch.filter(stato=BatchProduzione.Stato.SOSPESO).count(), 18,
+        )
+
+    def test_rq_reintegra_batch_e_sblocca_i_batch_pianificati(self):
+        Ubicazione.objects.create(
+            nome="Magazzino produzione sblocco",
+            tipo_magazzino=Ubicazione.TipoMagazzino.PRODUZIONE,
+        )
+        batch_nc = BatchProduzione.objects.create(
+            produzione=self.produzione, numero=1, ora_inizio=time(8),
+            ora_fine=time(8, 20), esito_conformita="NC",
+        )
+        nc = apri_non_conformita_batch(
+            batch_nc, False, "Blocco produzione", self.operatore,
+        )
+        nuova = nc.produzioni_bloccate.get()
+        risolvi_nc_produzione_derivata(nc, "REINTEGRA", {}, self.operatore)
+        nuova.refresh_from_db()
+        batch_nc.refresh_from_db()
+        self.assertEqual(nuova.bloccata_da_nc_id, nc.pk)
+        self.assertEqual(nuova.fase, Produzione.Fase.ROBOQUBO)
+        self.assertEqual(batch_nc.stato, BatchProduzione.Stato.CONFORME)
+        self.assertEqual(
+            nuova.batch.filter(stato=BatchProduzione.Stato.DA_LAVORARE).count(), 19,
+        )
+
+    def test_materiali_nc_entrano_e_rientrano_dal_magazzino_produzione(self):
+        ubicazione_origine = Ubicazione.objects.create(
+            nome="Magazzino MP origine NC",
+            tipo_magazzino=Ubicazione.TipoMagazzino.MP,
+        )
+        ubicazione_produzione = Ubicazione.objects.create(
+            nome="Magazzino produzione movimenti NC",
+            tipo_magazzino=Ubicazione.TipoMagazzino.PRODUZIONE,
+        )
+        lotto = Lotto.objects.create(
+            articolo=self.ingrediente, codice_lotto="MP-NC-MOV",
+            tipo=Lotto.Tipo.ACQUISTO, quantita_iniziale=Decimal("50"),
+        )
+        produzione = Produzione.objects.create(
+            articolo=self.articolo, data_produzione=date(2026, 8, 29),
+            lotto_provvisorio="TEMP260829", numero_batch_previsti=5,
+        )
+        PrelievoProduzione.objects.create(
+            produzione=produzione, lotto=lotto,
+            ubicazione_origine=ubicazione_origine,
+            quantita_prelevata=Decimal("50"), quantita_movimentata=Decimal("50"),
+            quantita_scarto=Decimal("0"),
+        )
+        BatchProduzione.objects.create(
+            produzione=produzione, numero=1, esito_conformita="C",
+        )
+        BatchProduzione.objects.create(
+            produzione=produzione, numero=2, esito_conformita="C",
+        )
+        batch_nc = BatchProduzione.objects.create(
+            produzione=produzione, numero=3, esito_conformita="NC",
+        )
+
+        nc = apri_non_conformita_batch(batch_nc, False, "Blocco", self.operatore)
+        derivata = nc.produzioni_bloccate.get()
+        materiale = nc.materiali_sospesi.get()
+        self.assertEqual(materiale.quantita, Decimal("20.000000"))
+        self.assertEqual(
+            Giacenza.objects.get(
+                lotto=materiale.lotto_recuperato,
+                ubicazione=ubicazione_produzione,
+            ).quantita,
+            Decimal("20.000000"),
+        )
+        self.assertTrue(Movimento.objects.filter(
+            lotto=materiale.lotto_recuperato,
+            tipo=Movimento.Tipo.QUARANTENA,
+            quantita=Decimal("20.000000"),
+            ubicazione_destinazione=ubicazione_produzione,
+        ).exists())
+
+        risolvi_nc_produzione_derivata(
+            nc, "REINTEGRA",
+            {materiale.pk: {"esito": MaterialeSospesoNonConformita.Esito.RIUTILIZZA, "note": ""}},
+            self.operatore,
+        )
+        self.assertEqual(
+            Giacenza.objects.get(lotto=materiale.lotto_recuperato).quantita,
+            Decimal("0"),
+        )
+        self.assertEqual(
+            derivata.prelievi.filter(lotto=materiale.lotto_recuperato).aggregate(
+                totale=Sum("quantita_prelevata"),
+            )["totale"],
+            Decimal("20.000000"),
+        )
+        self.assertTrue(Movimento.objects.filter(
+            lotto=materiale.lotto_recuperato,
+            tipo=Movimento.Tipo.REINTEGRO,
+            quantita=Decimal("20.000000"),
+            ubicazione_origine=ubicazione_produzione,
+        ).exists())
+
     def test_form_carrello_accetta_esiti_nc_e_na(self):
         tank = TankProduzione.objects.create(
             produzione=self.produzione, numero=1, numero_batch=1,
@@ -139,6 +343,33 @@ class FlussoProduzioneTreFasiTests(TestCase):
         self.assertEqual(
             genera_codice_lotto_produzione(self.articolo, data_conferma),
             "B260829",
+        )
+
+    def test_lotto_della_ripresa_usa_progressivo_numerico(self):
+        data_conferma = date(2026, 8, 29)
+        Lotto.objects.create(
+            articolo=self.articolo, codice_lotto="260829",
+            tipo=Lotto.Tipo.PRODUZIONE, quantita_iniziale=1,
+        )
+        self.assertEqual(
+            genera_codice_lotto_ripresa(self.articolo, data_conferma),
+            "1260829",
+        )
+
+    def test_lotto_derivato_rimuove_temp_e_mantiene_il_progressivo(self):
+        self.produzione.lotto_provvisorio = "1TEMP260829"
+        self.produzione.save(update_fields=["lotto_provvisorio"])
+        self.assertEqual(
+            genera_codice_lotto_per_produzione(self.produzione, date(2026, 9, 2)),
+            "1260829",
+        )
+        Lotto.objects.create(
+            articolo=self.articolo, codice_lotto="1260829",
+            tipo=Lotto.Tipo.PRODUZIONE, quantita_iniziale=1,
+        )
+        self.assertEqual(
+            genera_codice_lotto_per_produzione(self.produzione, date(2026, 9, 2)),
+            "2260829",
         )
 
     def test_carrello_non_e_collegato_al_tank(self):

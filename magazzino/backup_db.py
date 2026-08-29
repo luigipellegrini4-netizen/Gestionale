@@ -13,6 +13,7 @@ from .models import (
     PrelievoProduzioneSemilavorato, Produzione, ProduzioneSemilavorato,
     RegistroOperazione, Ricetta, RigaRicetta, TankProduzione, Ubicazione,
     BatchProduzione, CarrelloProduzione, NonConformitaLotto,
+    LottoUscitaProduzione, MaterialeSospesoNonConformita,
 )
 
 
@@ -22,7 +23,8 @@ MODELLI = [
     Fornitore, Ubicazione, Articolo, Lotto, NonConformitaLotto,
     Giacenza, Movimento, Ricetta,
     RigaRicetta, Produzione, TankProduzione, PrelievoProduzione,
-    BatchProduzione, CarrelloProduzione,
+    BatchProduzione, MaterialeSospesoNonConformita,
+    LottoUscitaProduzione, CarrelloProduzione,
     ProduzioneSemilavorato,
     PrelievoProduzioneSemilavorato, Confezionamento,
     ConsumoConfezionamento, Inscatolamento,
@@ -30,14 +32,31 @@ MODELLI = [
 ]
 MODELLI_AMMESSI = {modello._meta.label_lower for modello in MODELLI}
 ORDINE_ELIMINAZIONE = [
-    RegistroOperazione, NonConformitaLotto,
+    RegistroOperazione, MaterialeSospesoNonConformita,
+    CarrelloProduzione, BatchProduzione, TankProduzione,
+    LottoUscitaProduzione, NonConformitaLotto,
     ConsumoConfezionamento, Inscatolamento, Confezionamento,
     PrelievoProduzioneSemilavorato, PrelievoProduzione,
-    CarrelloProduzione, BatchProduzione,
-    TankProduzione, ProduzioneSemilavorato, Produzione,
+    ProduzioneSemilavorato, Produzione,
     RigaRicetta, Ricetta, Movimento,
     Giacenza, Lotto, Articolo, Ubicazione, Fornitore,
 ]
+
+
+def svuota_dati_magazzino():
+    """Elimina i dati MIRA conservando autenticazione, utenti e permessi."""
+    conteggi = {
+        modello._meta.label_lower: modello.objects.count()
+        for modello in ORDINE_ELIMINAZIONE
+    }
+    with transaction.atomic():
+        # Le produzioni derivate e le NC formano collegamenti PROTECT circolari,
+        # tutti opzionali: li sciogliamo prima della cancellazione.
+        Produzione.objects.update(derivata_da=None, bloccata_da_nc=None)
+        NonConformitaLotto.objects.update(produzione=None, batch=None)
+        for modello in ORDINE_ELIMINAZIONE:
+            modello.objects.all().delete()
+    return conteggi
 
 CAMPI_UTENTE = {
     Movimento._meta.label_lower: ("eseguito_da",),
@@ -94,6 +113,12 @@ def _prepara_backup(contenuto):
         get_user_model().objects.values_list("username", "pk")
     )
     for record in dati:
+        if record["model"] == TankProduzione._meta.label_lower:
+            vecchio_lotto_uscita = record["fields"].pop("lotto_uscita", None)
+            record["fields"].setdefault(
+                "stato_invasettamento",
+                "INVASETTATO" if vecchio_lotto_uscita else "DISPONIBILE",
+            )
         if record["model"] in CAMPI_UTENTE:
             for campo in CAMPI_UTENTE[record["model"]]:
                 username = record["fields"].get(campo)
@@ -113,12 +138,21 @@ def ripristina_backup(contenuto):
     nome = datetime.now().strftime("mira-pre-ripristino-%Y%m%d-%H%M%S.json")
     (cartella / nome).write_text(crea_backup(), encoding="utf-8")
 
-    with transaction.atomic(), connection.constraint_checks_disabled():
-        for modello in ORDINE_ELIMINAZIONE:
-            modello.objects.all().delete()
-        for oggetto in oggetti:
-            oggetto.save(save_m2m=True)
-        connection.check_constraints()
+    try:
+        with transaction.atomic(), connection.constraint_checks_disabled():
+            # I collegamenti tra produzione, NC e produzione derivata sono
+            # opzionali ma PROTECT: devono essere sciolti prima di svuotare.
+            Produzione.objects.update(derivata_da=None, bloccata_da_nc=None)
+            NonConformitaLotto.objects.update(produzione=None, batch=None)
+            for modello in ORDINE_ELIMINAZIONE:
+                modello.objects.all().delete()
+            for oggetto in oggetti:
+                oggetto.save(save_m2m=True)
+            connection.check_constraints()
+    except Exception as errore:
+        raise ValueError(
+            f"Ripristino non riuscito; il database non è stato modificato: {errore}"
+        ) from errore
 
     return {
         "backup_precedente": nome,

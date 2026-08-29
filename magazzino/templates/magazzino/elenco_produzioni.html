@@ -40,9 +40,17 @@
                     <th>Data</th>
                     <th>Prodotto</th>
                     <th>Lotto</th>
-                    <th>Quantità prodotta</th>
-                    <th>Stato</th>
-                    <th>Azioni</th>
+                    {% if tipo == "semilavorato" %}
+                        <th>Quantità prodotta</th>
+                        <th>Stato</th>
+                        <th>Azioni</th>
+                    {% else %}
+                        <th>Preparazione</th>
+                        <th>RoboQubo</th>
+                        <th>Invasettamento</th>
+                        <th>Stato generale</th>
+                        <th>Dettaglio</th>
+                    {% endif %}
                 </tr>
 
             </thead>
@@ -64,35 +72,41 @@
                         </td>
 
                         <td>
-                            {% if produzione.lotto %}
-                                {{ produzione.lotto.codice_lotto }}
+                            {% if tipo == "semilavorato" %}
+                                {% if produzione.lotto %}{{ produzione.lotto.codice_lotto }}{% else %}—{% endif %}
                             {% else %}
-                                -
+                                {% for uscita in produzione.lotti_uscita.all %}{{ uscita.lotto.codice_lotto }}{% if not forloop.last %}, {% endif %}{% empty %}—{% endfor %}
                             {% endif %}
                         </td>
 
-                        <td>
-                            {% if produzione.quantita_prodotta != None %}
-                                {{ produzione.quantita_prodotta }}
-                                {{ produzione.articolo.unita_misura }}
-                            {% else %}
-                                -
-                            {% endif %}
-                        </td>
-
-                        <td>
-                            {{ produzione.get_stato_display }}
-                        </td>
-
-                        <td>
-                            {% if tipo == "semilavorato" or perms.magazzino.operare_roboqubo %}<a href="{% url gestione_url produzione.pk %}">
-                                {% if produzione.stato == "BOZZA" %}
-                                    Apri ciclo di lavorazione
-                                {% else %}
-                                    Dettaglio
+                        {% if tipo == "semilavorato" %}
+                            <td>{% if produzione.quantita_prodotta != None %}{{ produzione.quantita_prodotta }} {{ produzione.articolo.unita_misura }}{% else %}—{% endif %}</td>
+                            <td>{{ produzione.get_stato_display }}</td>
+                            <td>{% if perms.magazzino.operare_magazzino %}<a href="{% url gestione_url produzione.pk %}">{% if produzione.stato == "BOZZA" %}Riprendi lavorazione{% else %}Dettaglio{% endif %}</a>{% else %}Solo consultazione{% endif %}</td>
+                        {% else %}
+                            <td>
+                                {% if produzione.stato == "ABORTITA" %}—{% else %}
+                                <strong>{% if produzione.preparazione_chiusa_il %}Conclusa{% else %}Da completare{% endif %}</strong>
+                                {% if not produzione.preparazione_chiusa_il and produzione.stato == "BOZZA" and perms.magazzino.operare_roboqubo %}<br><a class="btn btn-secondary" href="{% url 'gestione_produzione' produzione.pk %}#preparazione">Riprendi preparazione</a>{% endif %}
                                 {% endif %}
-                            </a>{% else %}Solo consultazione{% endif %}
-                        </td>
+                            </td>
+                            <td>
+                                {% if produzione.stato == "ABORTITA" %}—{% else %}
+                                <strong>{% if not produzione.preparazione_chiusa_il %}Non avviato{% else %}{{ produzione.get_stato_roboqubo_display }}{% endif %}</strong>
+                                {% if produzione.preparazione_chiusa_il and produzione.stato_roboqubo != "CONCLUSA" and produzione.stato_roboqubo != "SOSPESA" and produzione.stato == "BOZZA" and perms.magazzino.operare_roboqubo %}<br><a class="btn btn-secondary" href="{% url 'gestione_produzione' produzione.pk %}#roboqubo">Riprendi RoboQubo</a>{% elif produzione.stato_roboqubo == "SOSPESA" %}<br><small>In attesa del RQ</small>{% endif %}
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if produzione.stato == "ABORTITA" %}—{% else %}
+                                <strong>{{ produzione.get_stato_invasettamento_display }}</strong>
+                                {% if produzione.stato == "BOZZA" and perms.magazzino.operare_invasettamento %}
+                                    {% if produzione.stato_invasettamento == "IN_CORSO" or produzione.stato_invasettamento == "CONGELATO" %}<br><a class="btn btn-secondary" href="{% url 'invasettamento_produzione' produzione.pk %}">Riprendi invasettamento</a>{% elif produzione.stato_invasettamento == "NON_AVVIATO" and produzione.tank_disponibili %}<br><a class="btn btn-secondary" href="{% url 'invasettamento_produzione' produzione.pk %}">Avvia invasettamento</a>{% endif %}
+                                {% endif %}
+                                {% endif %}
+                            </td>
+                            <td>{{ produzione.get_stato_display }}</td>
+                            <td>{% if perms.magazzino.gestire_produzioni %}<a href="{% url 'dettaglio_gestione_produzione' produzione.pk %}">Dettaglio completo</a>{% else %}—{% endif %}</td>
+                        {% endif %}
 
                     </tr>
 

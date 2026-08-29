@@ -35,6 +35,11 @@ urlpatterns = [
         name="dettaglio_registro_operazione",
     ),
     path(
+        "amministrazione/azzera-database/",
+        views.azzera_database_magazzino,
+        name="azzera_database_magazzino",
+    ),
+    path(
         "", 
         views.home,
         name="home",

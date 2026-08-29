@@ -1,7 +1,5 @@
 from django.core.management.base import BaseCommand, CommandError
-from django.db import transaction
-
-from magazzino.backup_db import ORDINE_ELIMINAZIONE
+from magazzino.backup_db import svuota_dati_magazzino
 
 
 class Command(BaseCommand):
@@ -23,14 +21,7 @@ class Command(BaseCommand):
                 "Operazione annullata. Ripeti aggiungendo --conferma."
             )
 
-        conteggi = {
-            modello._meta.verbose_name_plural: modello.objects.count()
-            for modello in ORDINE_ELIMINAZIONE
-        }
-
-        with transaction.atomic():
-            for modello in ORDINE_ELIMINAZIONE:
-                modello.objects.all().delete()
+        conteggi = svuota_dati_magazzino()
 
         totale = sum(conteggi.values())
         self.stdout.write(

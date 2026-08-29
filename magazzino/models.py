@@ -542,6 +542,23 @@ class NonConformitaLotto(models.Model):
         null=True,
         blank=True,
     )
+    produzione = models.ForeignKey(
+        "Produzione",
+        on_delete=models.PROTECT,
+        related_name="non_conformita",
+        null=True,
+        blank=True,
+    )
+    batch = models.OneToOneField(
+        "BatchProduzione",
+        on_delete=models.PROTECT,
+        related_name="non_conformita",
+        null=True,
+        blank=True,
+    )
+    lotto_temporaneo = models.CharField(max_length=50, blank=True)
+    produzione_puo_proseguire = models.BooleanField(null=True, blank=True)
+    numero_batch_origine = models.PositiveSmallIntegerField(null=True, blank=True)
     stato = models.CharField(
         max_length=20,
         choices=Stato.choices,
@@ -736,6 +753,19 @@ class Produzione(models.Model):
     class Stato(models.TextChoices):
         BOZZA = "BOZZA", "Bozza"
         CONFERMATA = "CONFERMATA", "Confermata"
+        ABORTITA = "ABORTITA", "Abortita per non conformità"
+
+    class StatoRoboqubo(models.TextChoices):
+        NORMALE = "NORMALE", "In corso"
+        CON_NC = "CON_NC", "In corso con NC aperta"
+        SOSPESA = "SOSPESA", "Sospesa per NC"
+        CONCLUSA = "CONCLUSA", "Conclusa"
+
+    class StatoInvasettamento(models.TextChoices):
+        NON_AVVIATO = "NON_AVVIATO", "Non avviato"
+        IN_CORSO = "IN_CORSO", "In corso"
+        CONGELATO = "CONGELATO", "Congelato per NC"
+        CONCLUSO = "CONCLUSO", "Concluso"
 
     articolo = models.ForeignKey(
         Articolo,
@@ -768,6 +798,29 @@ class Produzione(models.Model):
     numero_batch_previsti = models.PositiveSmallIntegerField(default=1)
     preparazione_chiusa_il = models.DateTimeField(null=True, blank=True)
     roboqubo_chiuso_il = models.DateTimeField(null=True, blank=True)
+    stato_roboqubo = models.CharField(
+        max_length=15,
+        choices=StatoRoboqubo.choices,
+        default=StatoRoboqubo.NORMALE,
+        db_index=True,
+    )
+    stato_invasettamento = models.CharField(
+        max_length=15,
+        choices=StatoInvasettamento.choices,
+        default=StatoInvasettamento.NON_AVVIATO,
+        db_index=True,
+    )
+    invasettamento_congelato = models.BooleanField(default=False)
+    richiede_lotto_ripresa = models.BooleanField(default=False)
+    chiusa_per_nc = models.BooleanField(default=False)
+    derivata_da = models.ForeignKey(
+        "self", on_delete=models.PROTECT, related_name="produzioni_derivate",
+        null=True, blank=True,
+    )
+    bloccata_da_nc = models.ForeignKey(
+        NonConformitaLotto, on_delete=models.PROTECT, related_name="produzioni_bloccate",
+        null=True, blank=True,
+    )
     moca_igienizzati = models.BooleanField(default=False)
     moca_igienizzati_il = models.DateTimeField(null=True, blank=True)
     moca_igienizzati_da = models.ForeignKey(
@@ -814,6 +867,9 @@ class Produzione(models.Model):
     quantita_teorica_kg = models.DecimalField(
         max_digits=12, decimal_places=3, null=True, blank=True,
     )
+    quantita_batch_reintegrato_kg = models.DecimalField(
+        max_digits=12, decimal_places=6, default=0,
+    )
     resa_percentuale = models.DecimalField(
         max_digits=7, decimal_places=2, null=True, blank=True,
     )
@@ -853,6 +909,10 @@ class Produzione(models.Model):
 
 
 class TankProduzione(models.Model):
+    class StatoInvasettamento(models.TextChoices):
+        DISPONIBILE = "DISPONIBILE", "Disponibile"
+        INVASETTATO = "INVASETTATO", "Invasettato"
+
     produzione = models.ForeignKey(
         Produzione,
         on_delete=models.CASCADE,
@@ -885,6 +945,13 @@ class TankProduzione(models.Model):
         blank=True,
     )
     data_creazione = models.DateTimeField(auto_now_add=True)
+    stato_invasettamento = models.CharField(
+        max_length=15,
+        choices=StatoInvasettamento.choices,
+        default=StatoInvasettamento.DISPONIBILE,
+        db_index=True,
+    )
+    invasettato_il = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         ordering = ["numero"]
@@ -928,21 +995,92 @@ class EsitoControllo(models.TextChoices):
 
 
 class BatchProduzione(models.Model):
+    class Stato(models.TextChoices):
+        DA_LAVORARE = "DA_LAVORARE", "Da lavorare"
+        CONFORME = "CONFORME", "Conforme"
+        QUARANTENA = "QUARANTENA", "In quarantena"
+        SOSPESO = "SOSPESO", "Sospeso per NC"
+        SCARTATO = "SCARTATO", "Scartato"
+        REINTEGRATO = "REINTEGRATO", "Reintegrato"
+
     produzione = models.ForeignKey(Produzione, on_delete=models.CASCADE, related_name="batch")
     tank = models.ForeignKey(TankProduzione, on_delete=models.CASCADE, related_name="batch", null=True, blank=True)
     numero = models.PositiveSmallIntegerField()
-    ora_inizio = models.TimeField()
-    ora_fine = models.TimeField()
+    ora_inizio = models.TimeField(null=True, blank=True)
+    ora_fine = models.TimeField(null=True, blank=True)
     temperatura_conformita = models.DecimalField(max_digits=5, decimal_places=2, default=82)
     durata_conformita_secondi = models.PositiveSmallIntegerField(default=60)
-    esito_conformita = models.CharField(max_length=2, choices=EsitoControllo.choices)
+    esito_conformita = models.CharField(max_length=2, choices=EsitoControllo.choices, blank=True)
     note = models.TextField(blank=True)
+    stato = models.CharField(
+        max_length=15,
+        choices=Stato.choices,
+        default=Stato.CONFORME,
+        db_index=True,
+    )
+    quarantena_il = models.DateTimeField(null=True, blank=True)
+    risolto_il = models.DateTimeField(null=True, blank=True)
     registrato_il = models.DateTimeField(auto_now_add=True)
     registrato_da = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True)
 
     class Meta:
         ordering = ["numero"]
         constraints = [models.UniqueConstraint(fields=["produzione", "numero"], name="unico_batch_per_produzione")]
+
+
+class MaterialeSospesoNonConformita(models.Model):
+    class Esito(models.TextChoices):
+        DA_VALUTARE = "DA_VALUTARE", "Da valutare"
+        RIUTILIZZA = "RIUTILIZZA", "Riutilizzabile nella stessa produzione"
+        CONSERVA = "CONSERVA", "Conserva in Magazzino produzione"
+        SCARTA = "SCARTA", "Da scartare"
+
+    non_conformita = models.ForeignKey(
+        NonConformitaLotto, on_delete=models.CASCADE, related_name="materiali_sospesi",
+    )
+    prelievo = models.ForeignKey(
+        "PrelievoProduzione", on_delete=models.PROTECT, related_name="sospensioni_nc",
+    )
+    lotto_recuperato = models.ForeignKey(
+        Lotto, on_delete=models.PROTECT, related_name="materiali_sospesi_nc",
+        null=True, blank=True,
+    )
+    quantita = models.DecimalField(max_digits=12, decimal_places=6)
+    descrizione_miscela = models.CharField(max_length=200, blank=True)
+    esito = models.CharField(max_length=15, choices=Esito.choices, default=Esito.DA_VALUTARE)
+    nuova_data_scadenza = models.DateField(null=True, blank=True)
+    note = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ("prelievo__lotto__articolo__codice", "id")
+        constraints = [
+            models.UniqueConstraint(
+                fields=["non_conformita", "prelievo"], name="unico_materiale_sospeso_per_nc",
+            ),
+            models.CheckConstraint(condition=models.Q(quantita__gt=0), name="materiale_sospeso_quantita_positiva"),
+        ]
+
+
+class LottoUscitaProduzione(models.Model):
+    produzione = models.ForeignKey(Produzione, on_delete=models.PROTECT, related_name="lotti_uscita")
+    lotto = models.OneToOneField(Lotto, on_delete=models.PROTECT, related_name="uscita_produzione")
+    non_conformita = models.ForeignKey(
+        NonConformitaLotto, on_delete=models.PROTECT, null=True, blank=True, related_name="lotti_uscita",
+    )
+    provvisorio = models.BooleanField(default=False)
+    motivo_separazione = models.TextField(blank=True)
+    numero_vasetti_buoni = models.PositiveIntegerField(null=True, blank=True)
+    numero_vasetti_scartati = models.PositiveIntegerField(default=0)
+    numero_capsule_difettose = models.PositiveIntegerField(default=0)
+    peso_netto_vasetto_g = models.DecimalField(max_digits=10, decimal_places=3, null=True, blank=True)
+    quantita_ottenuta_kg = models.DecimalField(max_digits=12, decimal_places=3, null=True, blank=True)
+    quantita_teorica_kg = models.DecimalField(max_digits=12, decimal_places=3, null=True, blank=True)
+    resa_percentuale = models.DecimalField(max_digits=7, decimal_places=2, null=True, blank=True)
+    note = models.TextField(blank=True)
+    creato_il = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ("creato_il", "id")
 
 
 class CarrelloProduzione(models.Model):
@@ -961,6 +1099,13 @@ class CarrelloProduzione(models.Model):
     capsule_difettose = models.PositiveIntegerField(null=True, blank=True)
     chiuso_il = models.DateTimeField(null=True, blank=True)
     registrato_da = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True)
+    lotto_uscita = models.ForeignKey(
+        LottoUscitaProduzione,
+        on_delete=models.PROTECT,
+        related_name="carrelli",
+        null=True,
+        blank=True,
+    )
 
     class Meta:
         ordering = ["numero"]
@@ -1009,6 +1154,10 @@ class PrelievoProduzione(models.Model):
     quantita_resa_produzione = models.DecimalField(
         max_digits=12, decimal_places=6, default=0,
         help_text="Avanzo dell'UDA trasferito al Magazzino produzione.",
+    )
+    quantita_trasferita_nc = models.DecimalField(
+        max_digits=12, decimal_places=6, default=0,
+        help_text="Quota trasferita a una nuova produzione in seguito a NC.",
     )
 
     quantita_scarto = models.DecimalField(

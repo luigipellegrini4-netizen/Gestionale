@@ -5,9 +5,46 @@
 
 <div class="card"><h3>1. Preparazione</h3><div class="detail-grid"><div><strong>Data inizio</strong><br>{{ produzione.data_produzione|date:"d/m/Y" }}</div><div><strong>Lotto temporaneo</strong><br>{{ produzione.lotto_provvisorio }}</div><div><strong>Batch previsti</strong><br>{{ produzione.numero_batch_previsti }}</div><div><strong>Chiusura</strong><br>{{ produzione.preparazione_chiusa_il|date:"d/m/Y H:i"|default:"Aperta" }}</div></div><p><a class="btn btn-secondary" href="{% url 'modifica_produzione' produzione.pk %}">Modifica preparazione</a></p>{% if prelievi %}<table><thead><tr><th>Articolo</th><th>Lotto</th><th>Quantità prelevata</th><th>Scarto</th><th>Note</th></tr></thead><tbody>{% for p in prelievi %}<tr><td>{{ p.lotto.articolo }}</td><td>{{ p.lotto.codice_visualizzato }}</td><td>{{ p.quantita_prelevata }}</td><td>{{ p.quantita_scarto|default:"—" }}</td><td>{{ p.note|default:"—" }}</td></tr>{% endfor %}</tbody></table>{% endif %}</div>
 
-<div class="card"><h3>2. RoboQubo</h3>{% if batch_registrati %}<h4>Batch</h4><table><thead><tr><th>N.</th><th>Orario</th><th>Temperatura</th><th>Durata</th><th>Esito</th><th>Tank</th><th></th></tr></thead><tbody>{% for b in batch_registrati %}<tr><td>{{ b.numero }}</td><td>{{ b.ora_inizio|time:"H:i" }}–{{ b.ora_fine|time:"H:i" }}</td><td>{{ b.temperatura_conformita }} °C</td><td>{{ b.durata_conformita_secondi }} sec</td><td>{{ b.get_esito_conformita_display }}</td><td>{% if b.tank %}{{ b.tank.numero }}{% else %}—{% endif %}</td><td><a class="btn btn-secondary" href="{% url 'modifica_batch_produzione' b.pk %}">Modifica</a></td></tr>{% endfor %}</tbody></table>{% endif %}{% if tank %}<h4>Tank</h4><table><thead><tr><th>N.</th><th>Batch</th><th>°Brix</th><th>pH</th><th>Controllo</th><th></th></tr></thead><tbody>{% for t in tank %}<tr><td>{{ t.numero }}</td><td>{{ t.numero_batch }}</td><td>{{ t.gradi_brix|default:"—" }}</td><td>{{ t.ph|default:"—" }}</td><td>{{ t.data_ora_controlli|date:"d/m/Y H:i"|default:"—" }}</td><td><a class="btn btn-secondary" href="{% url 'modifica_tank' t.pk %}">Modifica</a></td></tr>{% endfor %}</tbody></table>{% endif %}</div>
+<div class="card">
+    <h3>2. RoboQubo</h3>
+    <div class="detail-grid">
+        <div><strong>Stato RoboQubo</strong><br>{{ produzione.get_stato_roboqubo_display }}</div>
+        <div><strong>Chiusura RoboQubo</strong><br>{{ produzione.roboqubo_chiuso_il|date:"d/m/Y H:i"|default:"—" }}</div>
+    </div>
+    <h4>Batch</h4>
+    {% if batch_registrati %}<div class="table-container"><table><thead><tr><th>N.</th><th>Orario</th><th>Tracciato</th><th>Esito registrato</th><th>Stato</th><th>Tank</th><th>Note</th><th></th></tr></thead><tbody>{% for b in batch_registrati %}<tr><td>{{ b.numero }}</td><td>{% if b.ora_inizio and b.ora_fine %}{{ b.ora_inizio|time:"H:i" }}–{{ b.ora_fine|time:"H:i" }}{% else %}—{% endif %}</td><td>{{ b.temperatura_conformita }} °C × {{ b.durata_conformita_secondi }} sec</td><td>{{ b.get_esito_conformita_display|default:"—" }}</td><td><strong>{{ b.get_stato_display }}</strong></td><td>{% if b.tank %}Tank {{ b.tank.numero }}{% else %}—{% endif %}</td><td>{{ b.note|default:"—" }}</td><td><a class="btn btn-secondary" href="{% url 'modifica_batch_produzione' b.pk %}">Modifica</a></td></tr>{% endfor %}</tbody></table></div>{% else %}<p>Nessun batch registrato.</p>{% endif %}
+    <h4>Tank e controlli</h4>
+    {% if tank %}<div class="table-container"><table><thead><tr><th>N.</th><th>Batch</th><th>°Brix</th><th>pH</th><th>Data e ora controllo</th><th>Stato</th><th></th></tr></thead><tbody>{% for t in tank %}<tr><td>{{ t.numero }}</td><td>{{ t.numero_batch }}</td><td>{{ t.gradi_brix|default:"—" }}</td><td>{{ t.ph|default:"—" }}</td><td>{{ t.data_ora_controlli|date:"d/m/Y H:i"|default:"—" }}</td><td>{% if t.annullato %}Eliminato{% elif t.data_ora_controlli %}Controllato{% else %}Aperto{% endif %}</td><td><a class="btn btn-secondary" href="{% url 'modifica_tank' t.pk %}">Modifica</a></td></tr>{% endfor %}</tbody></table></div>{% else %}<p>Nessun tank registrato.</p>{% endif %}
+</div>
 
-<div class="card"><h3>3. Invasettamento</h3><p>MOCA: {% if produzione.moca_igienizzati %}confermato il {{ produzione.moca_igienizzati_il|date:"d/m/Y H:i" }}{% else %}non confermato{% endif %}. <a class="btn btn-secondary" href="{% url 'modifica_invasettamento_produzione' produzione.pk %}">Modifica dati generali</a></p>{% if carrelli %}<table><thead><tr><th>Carrello</th><th>Pastorizzazione</th><th>Shock/vuoto</th><th></th></tr></thead><tbody>{% for c in carrelli %}<tr><td>{{ c.numero }}</td><td>{{ c.get_esito_pastorizzazione_display }} · {{ c.pastorizzazione_registrata_il|date:"d/m/Y H:i" }}</td><td>{% if c.shock_vuoto_registrato_il %}{{ c.get_esito_shock_vuoto_display }} · {{ c.shock_vuoto_registrato_il|date:"d/m/Y H:i" }}{% else %}Aperto{% endif %}</td><td><a class="btn btn-secondary" href="{% url 'modifica_carrello_produzione' c.pk %}">Modifica</a></td></tr>{% endfor %}</tbody></table>{% endif %}</div>
+<div class="card">
+    <h3>3. Invasettamento</h3>
+    <div class="detail-grid">
+        <div><strong>Imballaggi MOCA</strong><br>{% if produzione.moca_igienizzati %}Puliti e igienizzati{% else %}Non confermati{% endif %}</div>
+        <div><strong>Registrazione MOCA</strong><br>{{ produzione.moca_igienizzati_il|date:"d/m/Y H:i"|default:"—" }}</div>
+        <div><strong>Operatore MOCA</strong><br>{{ produzione.moca_igienizzati_da.get_username|default:"—" }}</div>
+        <div><strong>Stato fase</strong><br>{% if produzione.invasettamento_congelato %}Congelata{% elif produzione.stato == "CONFERMATA" %}Conclusa{% else %}In lavorazione{% endif %}</div>
+        <div><strong>Stato invasettamento</strong><br>{{ produzione.get_stato_invasettamento_display }}</div>
+    </div>
+    <p><a class="btn btn-secondary" href="{% url 'modifica_invasettamento_produzione' produzione.pk %}">Modifica dati generali</a></p>
+
+    <h4>Pastorizzazione, shock termico e verifica vuoto dei carrelli</h4>
+    {% if carrelli %}
+    <div class="table-container"><table>
+        <thead><tr><th>Carrello</th><th>Seconda pastorizzazione</th><th>Note pastorizzazione</th><th>Shock termico e vuoto</th><th>Note shock/vuoto</th><th>Lotto di uscita</th><th></th></tr></thead>
+        <tbody>{% for c in carrelli %}<tr>
+            <td><strong>{{ c.numero }}</strong></td>
+            <td>{{ c.temperatura_pastorizzazione }} °C × {{ c.durata_pastorizzazione_minuti }} min<br><strong>{{ c.get_esito_pastorizzazione_display }}</strong> · {{ c.pastorizzazione_registrata_il|date:"d/m/Y H:i" }}</td>
+            <td>{{ c.note_pastorizzazione|default:"—" }}</td>
+            <td>{% if c.shock_vuoto_registrato_il %}<strong>{{ c.get_esito_shock_vuoto_display }}</strong> · {{ c.shock_vuoto_registrato_il|date:"d/m/Y H:i" }}{% else %}<strong>Non registrato</strong>{% endif %}</td>
+            <td>{{ c.note_shock_vuoto|default:"—" }}</td>
+            <td>{% if c.lotto_uscita %}<a href="{% url 'dettaglio_lotto' c.lotto_uscita.lotto.pk %}">{{ c.lotto_uscita.lotto.codice_lotto }}</a>{% else %}—{% endif %}</td>
+            <td><a class="btn btn-secondary" href="{% url 'modifica_carrello_produzione' c.pk %}">Modifica</a></td>
+        </tr>{% endfor %}</tbody>
+    </table></div>
+    {% else %}<p>Nessun carrello registrato.</p>{% endif %}
+</div>
 
 <div class="card"><h3>4. Risultato finale</h3>{% if produzione.stato == "CONFERMATA" %}<div class="detail-grid"><div><strong>Vasetti buoni</strong><br>{{ produzione.quantita_prodotta }}</div><div><strong>Vasetti da scartare</strong><br>{{ produzione.pezzi_difettosi_finali }}</div><div><strong>Capsule difettose</strong><br>{{ produzione.capsule_difettose_finali }}</div><div><strong>Peso netto</strong><br>{{ produzione.peso_netto_vasetto_g }} g</div><div><strong>Quantità teorica</strong><br>{{ produzione.quantita_teorica_kg }} kg</div><div><strong>Quantità effettiva</strong><br>{{ produzione.quantita_ottenuta_kg }} kg</div><div><strong>Resa</strong><br>{{ produzione.resa_percentuale }}%</div></div><p><a class="btn btn-secondary" href="{% url 'modifica_risultato_produzione' produzione.pk %}">Modifica risultato finale</a></p>{% else %}<p>La lavorazione non è ancora conclusa.</p>{% endif %}</div>
+{% if produzione.lotti_uscita.exists %}<div class="card"><h3>Lotti definitivi ottenuti</h3><table><thead><tr><th>Lotto</th><th>Vasetti buoni</th><th>Scarti</th><th>Capsule difettose</th><th>Peso netto</th><th>Quantità teorica</th><th>Quantità ottenuta</th><th>Resa</th></tr></thead><tbody>{% for uscita in produzione.lotti_uscita.all %}<tr><td><a href="{% url 'dettaglio_lotto' uscita.lotto.pk %}">{{ uscita.lotto.codice_lotto }}</a></td><td>{{ uscita.numero_vasetti_buoni }}</td><td>{{ uscita.numero_vasetti_scartati }}</td><td>{{ uscita.numero_capsule_difettose }}</td><td>{{ uscita.peso_netto_vasetto_g }} g</td><td>{{ uscita.quantita_teorica_kg|default:"—" }} kg</td><td>{{ uscita.quantita_ottenuta_kg }} kg</td><td>{{ uscita.resa_percentuale|default:"—" }}%</td></tr>{% endfor %}</tbody></table></div>{% endif %}
 {% endblock %}

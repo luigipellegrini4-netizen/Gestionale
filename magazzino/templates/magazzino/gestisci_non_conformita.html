@@ -25,6 +25,11 @@
         <div><strong>Quantità totale</strong>{{ non_conformita.quantita_quarantena }} {{ non_conformita.lotto.articolo.unita_misura }}</div>
         <div><strong>Posizione originaria</strong>{{ non_conformita.ubicazione_origine.nome }}</div>
         {% endif %}
+        {% if non_conformita.batch %}
+        <div><strong>Produzione</strong>{{ non_conformita.produzione.articolo.codice }} — {{ non_conformita.lotto_temporaneo }}</div>
+        <div><strong>Batch</strong>{{ non_conformita.batch.numero }} — {{ non_conformita.batch.get_stato_display }}</div>
+        <div><strong>Decisione operatore</strong>{% if non_conformita.produzione_puo_proseguire %}Proseguire{% else %}Sospendere RoboQubo{% endif %}</div>
+        {% endif %}
     </div>
     <p><strong>Motivo</strong><br>{{ non_conformita.motivo }}</p>
 </div>
@@ -37,12 +42,51 @@
     {% endif %}
     <form method="post">
         {% csrf_token %}
-        {{ form.as_p }}
+        {% if non_conformita.batch %}
+            {% if non_conformita.produzioni_bloccate.exists %}<div class="message warning"><strong>Produzione derivata bloccata.</strong> Decidi il destino del batch in quarantena e dei materiali residui per stabilire se la produzione può riprendere.</div>{% endif %}
+            <div class="card">
+                <h3>Decisione sul batch</h3>
+                <p>{{ form.campo_esito_batch.label_tag }} {{ form.campo_esito_batch }} {{ form.campo_esito_batch.errors }}</p>
+            </div>
+            {% if form.righe_materiali %}
+            <div class="card">
+                <h3>Decisione sui materiali preparati</h3>
+                <p>Per ogni ingrediente scegli <strong>Reintegro</strong> oppure <strong>Scarto</strong>.</p>
+                <p><button type="button" id="reintegra-tutti-materiali" class="btn btn-secondary">Reintegra tutti i materiali</button></p>
+                <div class="table-container"><table>
+                    <thead><tr><th>Ingrediente</th><th>Decisione</th>{% if form.mostra_scadenza_materiali %}<th>Nuova scadenza</th>{% endif %}<th>Note</th></tr></thead>
+                    <tbody>{% for riga in form.righe_materiali %}<tr>
+                        <td><strong>{{ riga.ingrediente }}</strong><br><small>{{ riga.quantita }} {{ riga.unita_misura }}</small></td>
+                        <td>{{ riga.decisione }}{{ riga.decisione.errors }}</td>
+                        {% if form.mostra_scadenza_materiali %}<td>{{ riga.scadenza }}{{ riga.scadenza.errors }}</td>{% endif %}
+                        <td>{{ riga.note }}{{ riga.note.errors }}</td>
+                    </tr>{% endfor %}</tbody>
+                </table></div>
+            </div>
+            {% endif %}
+            <div class="card"><h3>Analisi, azione correttiva e chiusura</h3>
+            {% for campo in form.campi_generali %}<p>{{ campo.label_tag }} {{ campo }} {{ campo.errors }}{% if campo.help_text %}<br><small>{{ campo.help_text }}</small>{% endif %}</p>{% endfor %}
+            </div>
+        {% else %}
+            {{ form.as_p }}
+        {% endif %}
         <div class="form-actions">
             <button type="submit" name="azione" value="salva" class="btn btn-secondary">Salva in lavorazione</button>
-            <button type="submit" name="azione" value="chiudi" class="btn">Chiudi non conformità</button>
+            <button type="submit" name="azione" value="chiudi" class="btn">Registra non conformità</button>
             <a href="{% url 'registro_non_conformita' %}" class="btn btn-secondary">Annulla</a>
         </div>
     </form>
 </div>
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+    const pulsante = document.getElementById("reintegra-tutti-materiali");
+    if (!pulsante) return;
+    pulsante.addEventListener("click", function () {
+        document.querySelectorAll('select[name^="materiale_esito_"]').forEach(function (campo) {
+            campo.value = "RIUTILIZZA";
+            campo.dispatchEvent(new Event("change", { bubbles: true }));
+        });
+    });
+});
+</script>
 {% endblock %}

@@ -10,7 +10,8 @@ from django.urls import reverse
 from .backup_db import crea_backup, ripristina_backup
 from .models import (
     Articolo, BatchProduzione, CarrelloProduzione, Fornitore, Giacenza,
-    Lotto, Movimento, Produzione, TankProduzione, Ubicazione,
+    Lotto, Movimento, NonConformitaLotto, Produzione, TankProduzione,
+    Ubicazione,
 )
 
 
@@ -110,6 +111,27 @@ class BackupDatabaseTests(TestCase):
 
         self.assertTrue(Fornitore.objects.filter(codice="FOR-BACKUP").exists())
 
+    def test_azzeramento_web_elimina_magazzino_ma_conserva_utenti(self):
+        self.client.force_login(self.utente_normale)
+        response = self.client.get(reverse("azzera_database_magazzino"))
+        self.assertEqual(response.status_code, 302)
+
+        self.client.force_login(self.superuser)
+        response = self.client.post(
+            reverse("azzera_database_magazzino"),
+            {"conferma": "AZZERA"},
+        )
+        self.assertRedirects(response, reverse("home"))
+        self.assertFalse(Articolo.objects.exists())
+        self.assertFalse(Lotto.objects.exists())
+        self.assertFalse(Giacenza.objects.exists())
+        self.assertTrue(
+            get_user_model().objects.filter(username="backup-admin").exists()
+        )
+        self.assertTrue(
+            get_user_model().objects.filter(username="backup-operatore").exists()
+        )
+
     def test_round_trip_include_batch_e_carrelli_indipendenti(self):
         prodotto = Articolo.objects.create(
             codice="PF-BACKUP", descrizione="Prodotto backup",
@@ -142,3 +164,36 @@ class BackupDatabaseTests(TestCase):
         carrello = CarrelloProduzione.objects.select_related("registrato_da").get()
         self.assertEqual(carrello.registrato_da.username, "backup-operatore")
         self.assertEqual(BatchProduzione.objects.get().tank.numero, 1)
+
+    def test_ripristino_gestisce_collegamenti_circolari_tra_nc_e_produzioni(self):
+        prodotto = Articolo.objects.create(
+            codice="PF-NC-BACKUP", descrizione="Prodotto NC backup",
+            categoria=Articolo.Categoria.PRODOTTO_FINITO,
+            unita_misura=Articolo.UnitaMisura.PZ,
+        )
+        originale = Produzione.objects.create(
+            articolo=prodotto, data_produzione="2026-08-29",
+            numero_batch_previsti=1, lotto_provvisorio="TEMP260829",
+        )
+        batch = BatchProduzione.objects.create(
+            produzione=originale, numero=1, esito_conformita="NC",
+            stato=BatchProduzione.Stato.QUARANTENA,
+        )
+        nc = NonConformitaLotto.objects.create(
+            produzione=originale, batch=batch, motivo="Prova backup NC",
+            aperta_da=self.superuser,
+        )
+        derivata = Produzione.objects.create(
+            articolo=prodotto, data_produzione="2026-08-29",
+            numero_batch_previsti=1, lotto_provvisorio="1TEMP260829",
+            derivata_da=originale, bloccata_da_nc=nc,
+        )
+
+        contenuto = crea_backup().encode("utf-8")
+        with TemporaryDirectory() as cartella, override_settings(BASE_DIR=cartella):
+            ripristina_backup(contenuto)
+
+        derivata_ripristinata = Produzione.objects.get(pk=derivata.pk)
+        self.assertEqual(derivata_ripristinata.derivata_da_id, originale.pk)
+        self.assertEqual(derivata_ripristinata.bloccata_da_nc_id, nc.pk)
+        self.assertEqual(NonConformitaLotto.objects.get(pk=nc.pk).batch_id, batch.pk)

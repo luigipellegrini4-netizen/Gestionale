@@ -595,7 +595,8 @@ class ConfermaProduzioneTests(TestCase):
         tank = registra_controlli_tank(tank, gradi_brix="65", ph="3.20")
         self.assertIsNotNone(tank.data_ora_controlli)
         produzione.moca_igienizzati = True
-        produzione.save(update_fields=["moca_igienizzati"])
+        produzione.stato_roboqubo = Produzione.StatoRoboqubo.CONCLUSA
+        produzione.save(update_fields=["moca_igienizzati", "stato_roboqubo"])
         CarrelloProduzione.objects.create(
             produzione=produzione,
             numero=1,
@@ -633,6 +634,10 @@ class ConfermaProduzioneTests(TestCase):
         )
         self.assertEqual(produzione_confermata.quantita_ottenuta_kg, Decimal("1"))
         self.assertEqual(produzione_confermata.quantita_teorica_kg, Decimal("5"))
+        self.assertEqual(
+            produzione_confermata.stato_invasettamento,
+            Produzione.StatoInvasettamento.CONCLUSO,
+        )
         self.assertEqual(produzione_confermata.resa_percentuale, Decimal("20"))
         self.assertIsNotNone(produzione_confermata.data_ora_pastorizzazione)
         self.assertIsNotNone(produzione_confermata.data_ora_verifica_vuoto)

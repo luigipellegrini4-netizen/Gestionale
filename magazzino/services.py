@@ -1,5 +1,5 @@
 from decimal import Decimal, ROUND_CEILING, ROUND_DOWN, ROUND_HALF_UP
-from datetime import date
+from datetime import date, timedelta
 
 from django.db import transaction
 from django.db.models import Q
@@ -11,6 +11,9 @@ from .models import (
     Giacenza,
     Movimento,
     NonConformitaLotto,
+    BatchProduzione,
+    MaterialeSospesoNonConformita,
+    LottoUscitaProduzione,
     Ubicazione,
     Produzione,
     TankProduzione,
@@ -19,6 +22,710 @@ from .models import (
     ConsumoConfezionamento,
     Inscatolamento,
 )
+
+
+def calcola_quantita_teorica_ricetta(produzione, numero_batch=None):
+    """Quantità di prodotto prevista: ingredienti di un batch × batch della lavorazione."""
+    ricetta = produzione.articolo.ricette.filter(attiva=True).first()
+    if ricetta is None:
+        raise ValueError(
+            f"L'articolo {produzione.articolo.codice} non ha una ricetta attiva."
+        )
+    quantita_per_batch = sum(
+        ricetta.righe.filter(ingrediente_prodotto=True).values_list("quantita", flat=True),
+        Decimal("0"),
+    )
+    batch = produzione.numero_batch_previsti if numero_batch is None else numero_batch
+    return (quantita_per_batch * Decimal(batch)).quantize(Decimal("0.001"))
+
+
+@transaction.atomic
+def concludi_invasettamento_senza_nuovo_lotto(produzione):
+    """Conclude una fase i cui tank sono già confluiti in lotti di uscita."""
+    produzione = Produzione.objects.select_for_update().get(pk=produzione.pk)
+    if produzione.stato != Produzione.Stato.BOZZA:
+        raise ValueError("La produzione è già stata conclusa.")
+    if produzione.stato_roboqubo != Produzione.StatoRoboqubo.CONCLUSA:
+        raise ValueError("RoboQubo deve essere concluso prima dell’invasettamento.")
+    if produzione.tank.filter(
+        annullato=False, data_ora_controlli__isnull=False,
+        stato_invasettamento=TankProduzione.StatoInvasettamento.DISPONIBILE,
+    ).exists():
+        raise ValueError("Ci sono ancora tank da invasettare.")
+    if produzione.carrelli.filter(lotto_uscita__isnull=True).exists():
+        raise ValueError("Ci sono ancora carrelli da associare alla chiusura.")
+
+    uscite = list(produzione.lotti_uscita.select_related("lotto"))
+    if not uscite:
+        raise ValueError("Non risultano lotti di invasettamento già registrati.")
+    quantita_prodotta = sum(
+        (Decimal(uscita.numero_vasetti_buoni or 0) for uscita in uscite), Decimal("0"),
+    )
+    quantita_ottenuta = sum(
+        (uscita.quantita_ottenuta_kg or Decimal("0") for uscita in uscite), Decimal("0"),
+    )
+    quantita_teorica = calcola_quantita_teorica_ricetta(produzione)
+    # Il riferimento riepilogativo è valorizzato soltanto quando il lotto è
+    # realmente unico; con più uscite la fonte è l'elenco lotti_uscita.
+    produzione.lotto = uscite[0].lotto if len(uscite) == 1 else None
+    produzione.quantita_prodotta = quantita_prodotta
+    produzione.quantita_ottenuta_kg = quantita_ottenuta
+    pesi_netti = {u.peso_netto_vasetto_g for u in uscite if u.peso_netto_vasetto_g is not None}
+    produzione.peso_netto_vasetto_g = pesi_netti.pop() if len(pesi_netti) == 1 else None
+    produzione.quantita_teorica_kg = quantita_teorica
+    produzione.resa_percentuale = (
+        quantita_ottenuta / quantita_teorica * Decimal("100")
+        if quantita_teorica > 0 else None
+    )
+    produzione.pezzi_difettosi_finali = sum(u.numero_vasetti_scartati for u in uscite)
+    produzione.capsule_difettose_finali = sum(u.numero_capsule_difettose for u in uscite)
+    produzione.difetti_registrati_il = timezone.now()
+    produzione.fase = Produzione.Fase.COMPLETATA
+    produzione.stato = Produzione.Stato.CONFERMATA
+    produzione.stato_invasettamento = Produzione.StatoInvasettamento.CONCLUSO
+    produzione.invasettamento_congelato = False
+    produzione.save(update_fields=[
+        "lotto", "quantita_prodotta", "quantita_ottenuta_kg", "peso_netto_vasetto_g",
+        "quantita_teorica_kg", "resa_percentuale", "pezzi_difettosi_finali",
+        "capsule_difettose_finali", "difetti_registrati_il", "fase", "stato",
+        "stato_invasettamento", "invasettamento_congelato",
+    ])
+    return produzione
+
+
+@transaction.atomic
+def conferma_lotto_parziale_produzione(
+    produzione,
+    codice_lotto,
+    quantita_prodotta,
+    peso_netto_vasetto_g,
+    pezzi_difettosi_finali,
+    capsule_difettose_finali,
+    note,
+    operatore,
+):
+    produzione = Produzione.objects.select_for_update().get(pk=produzione.pk)
+    if produzione.stato != Produzione.Stato.BOZZA or not produzione.invasettamento_congelato:
+        raise ValueError("Il lotto parziale è consentito solo per una produzione congelata da NC.")
+    tank = produzione.tank.filter(
+        annullato=False, data_ora_controlli__isnull=False,
+        stato_invasettamento=TankProduzione.StatoInvasettamento.DISPONIBILE,
+    )
+    carrelli = produzione.carrelli.filter(chiuso_il__isnull=False, lotto_uscita__isnull=True)
+    if not tank.exists():
+        raise ValueError("Non ci sono tank completati ancora da invasettare.")
+    if not carrelli.exists():
+        raise ValueError("Non ci sono carrelli completati per questo lotto.")
+    if produzione.carrelli.filter(chiuso_il__isnull=True).exists():
+        raise ValueError("Completa tutti i carrelli aperti.")
+
+    quantita_prodotta = int(quantita_prodotta)
+    scarti = int(pezzi_difettosi_finali)
+    peso = Decimal(str(peso_netto_vasetto_g))
+    quantita_ottenuta = (Decimal(quantita_prodotta + scarti) * peso / Decimal("1000")).quantize(Decimal("0.001"))
+    batch_nei_tank = sum((t.numero_batch for t in tank), 0)
+    quantita_teorica = calcola_quantita_teorica_ricetta(
+        produzione, numero_batch=batch_nei_tank,
+    )
+    resa = (
+        quantita_ottenuta / quantita_teorica * Decimal("100")
+        if quantita_teorica > 0 else None
+    )
+    if Lotto.objects.filter(articolo=produzione.articolo, codice_lotto=codice_lotto).exists():
+        raise ValueError("Il numero lotto indicato è già utilizzato per questo articolo.")
+
+    ricetta = produzione.articolo.ricette.filter(attiva=True).prefetch_related("righe__articolo").first()
+    if ricetta is None:
+        raise ValueError("Il prodotto non ha una ricetta attiva.")
+    vasetti_totali = Decimal(quantita_prodotta + scarti)
+    for riga in ricetta.righe.select_related("articolo").filter(
+        ingrediente_prodotto=False, articolo__categoria=Articolo.Categoria.MOCA,
+    ):
+        for prelievo in registra_prelievi_produzione(
+            produzione=produzione,
+            articolo=riga.articolo,
+            quantita_richiesta=vasetti_totali * riga.quantita,
+            note=f"MOCA lotto definitivo parziale {codice_lotto}: {riga.articolo.codice}",
+            operatore=operatore,
+        ):
+            registra_scarto_prelievo_produzione(prelievo, Decimal("0"))
+
+    ubicazione = Ubicazione.objects.filter(
+        tipo_magazzino=Ubicazione.TipoMagazzino.PACKAGING, attiva=True,
+    ).order_by("id").first()
+    if ubicazione is None:
+        raise ValueError("Non esiste un'ubicazione attiva per il Magazzino Packaging.")
+    lotto = Lotto.objects.create(
+        articolo=produzione.articolo,
+        codice_lotto=codice_lotto,
+        tipo=Lotto.Tipo.PRODUZIONE,
+        fase=Lotto.Fase.INVASETTATO,
+        data_produzione=timezone.localdate(),
+        quantita_iniziale=quantita_prodotta,
+        note=note,
+    )
+    Giacenza.objects.create(lotto=lotto, ubicazione=ubicazione, quantita=quantita_prodotta)
+    Movimento.objects.create(
+        tipo=Movimento.Tipo.PRODUZIONE,
+        lotto=lotto,
+        quantita=quantita_prodotta,
+        ubicazione_destinazione=ubicazione,
+        causale="Produzione parziale chiusa durante NC RoboQubo",
+        note=note,
+        eseguito_da=operatore,
+    )
+    uscita = LottoUscitaProduzione.objects.create(
+        produzione=produzione,
+        lotto=lotto,
+        non_conformita=produzione.non_conformita.exclude(stato=NonConformitaLotto.Stato.CHIUSA).first(),
+        provvisorio=False,
+        motivo_separazione="Chiusura definitiva dell'invasettato disponibile durante NC RoboQubo",
+        numero_vasetti_buoni=quantita_prodotta,
+        numero_vasetti_scartati=scarti,
+        numero_capsule_difettose=int(capsule_difettose_finali),
+        peso_netto_vasetto_g=peso,
+        quantita_ottenuta_kg=quantita_ottenuta,
+        quantita_teorica_kg=quantita_teorica,
+        resa_percentuale=resa,
+        note=note,
+    )
+    tank.update(
+        stato_invasettamento=TankProduzione.StatoInvasettamento.INVASETTATO,
+        invasettato_il=timezone.now(),
+    )
+    carrelli.update(lotto_uscita=uscita)
+    produzione.moca_igienizzati = False
+    produzione.moca_igienizzati_il = None
+    produzione.moca_igienizzati_da = None
+    produzione.stato_invasettamento = Produzione.StatoInvasettamento.CONGELATO
+    produzione.save(update_fields=[
+        "moca_igienizzati", "moca_igienizzati_il", "moca_igienizzati_da",
+        "stato_invasettamento",
+    ])
+    return uscita
+
+
+@transaction.atomic
+def apri_non_conformita_batch(batch, produzione_puo_proseguire, motivo, operatore):
+    batch = BatchProduzione.objects.select_for_update().select_related("produzione").get(pk=batch.pk)
+    produzione = Produzione.objects.select_for_update().get(pk=batch.produzione_id)
+    if batch.esito_conformita != "NC":
+        raise ValueError("La quarantena può essere aperta solo per un batch non conforme.")
+    if hasattr(batch, "non_conformita"):
+        raise ValueError("Per questo batch esiste già una non conformità.")
+
+    puo_proseguire = bool(produzione_puo_proseguire)
+    nc = NonConformitaLotto.objects.create(
+        produzione=produzione,
+        batch=batch,
+        lotto_temporaneo=produzione.lotto_provvisorio,
+        produzione_puo_proseguire=puo_proseguire,
+        numero_batch_origine=batch.numero,
+        ambito=NonConformitaLotto.Ambito.PRODUZIONE,
+        tipo_nc=NonConformitaLotto.Tipo.INTERNO,
+        motivo=motivo or f"Batch {batch.numero} non conforme",
+        note_apertura=(
+            "Batch messo in quarantena; produzione autorizzata a proseguire dall'operatore."
+            if puo_proseguire else
+            "Batch messo in quarantena; fase RoboQubo sospesa dall'operatore."
+        ),
+        aperta_da=operatore,
+    )
+    batch.stato = BatchProduzione.Stato.QUARANTENA
+    batch.quarantena_il = timezone.now()
+    batch.save(update_fields=["stato", "quarantena_il"])
+    produzione.invasettamento_congelato = True
+    if produzione.stato_invasettamento != Produzione.StatoInvasettamento.NON_AVVIATO:
+        produzione.stato_invasettamento = Produzione.StatoInvasettamento.CONGELATO
+    produzione.stato_roboqubo = (
+        Produzione.StatoRoboqubo.CON_NC
+        if puo_proseguire else Produzione.StatoRoboqubo.SOSPESA
+    )
+    produzione.save(update_fields=[
+        "invasettamento_congelato", "stato_roboqubo", "stato_invasettamento",
+    ])
+
+    if puo_proseguire:
+        oggi = timezone.localdate()
+        base_temp = f"TEMP{oggi:%y%m%d}"
+        progressivo = 1
+        nuovo_temp = f"{progressivo}{base_temp}"
+        while Produzione.objects.filter(lotto_provvisorio=nuovo_temp).exists():
+            progressivo += 1
+            nuovo_temp = f"{progressivo}{base_temp}"
+
+        nuova_produzione = Produzione.objects.create(
+            articolo=produzione.articolo,
+            data_produzione=oggi,
+            lotto_provvisorio=nuovo_temp,
+            numero_batch_previsti=1,
+            fase=Produzione.Fase.PREPARAZIONE,
+            stato_roboqubo=Produzione.StatoRoboqubo.SOSPESA,
+            invasettamento_congelato=True,
+            derivata_da=produzione,
+            bloccata_da_nc=nc,
+            note=f"Batch in quarantena trasferito automaticamente dalla NC-{nc.pk}.",
+        )
+        nuova_produzione.quantita_teorica_kg = calcola_quantita_teorica_ricetta(nuova_produzione)
+        nuova_produzione.save(update_fields=["quantita_teorica_kg"])
+        batch.produzione = nuova_produzione
+        batch.numero = 1
+        batch.save(update_fields=["produzione", "numero"])
+
+        rapporto_batch = Decimal("1") / Decimal(produzione.numero_batch_previsti)
+        for prelievo in produzione.prelievi.all():
+            quantita_esclusa = (
+                prelievo.quantita_prelevata * rapporto_batch
+            ).quantize(Decimal("0.000001"))
+            prelievo.quantita_trasferita_nc += quantita_esclusa
+            prelievo.save(update_fields=["quantita_trasferita_nc"])
+
+        produzione.numero_batch_previsti -= 1
+        produzione.quantita_teorica_kg = calcola_quantita_teorica_ricetta(produzione)
+        produzione.save(update_fields=["numero_batch_previsti", "quantita_teorica_kg"])
+        nc.note_apertura = (
+            f"Batch in quarantena trasferito alla produzione {nuovo_temp}; "
+            "la produzione originale è autorizzata a proseguire."
+        )
+        nc.save(update_fields=["note_apertura"])
+        return nc
+
+    if not puo_proseguire:
+        oggi = timezone.localdate()
+        ubicazione_produzione = Ubicazione.objects.filter(
+            tipo_magazzino=Ubicazione.TipoMagazzino.PRODUZIONE, attiva=True,
+        ).order_by("id").first()
+        if ubicazione_produzione is None:
+            raise ValueError("Non è configurata un'ubicazione attiva di Magazzino produzione.")
+
+        batch_previsti_originali = produzione.numero_batch_previsti
+        batch_precedenti = produzione.batch.filter(numero__lt=batch.numero).count()
+        batch_da_trasferire = max(batch_previsti_originali - batch_precedenti, 1)
+        base_temp = f"TEMP{oggi:%y%m%d}"
+        progressivo = 1
+        nuovo_temp = f"{progressivo}{base_temp}"
+        while Produzione.objects.filter(lotto_provvisorio=nuovo_temp).exists():
+            progressivo += 1
+            nuovo_temp = f"{progressivo}{base_temp}"
+
+        nuova_produzione = Produzione.objects.create(
+            articolo=produzione.articolo,
+            data_produzione=oggi,
+            lotto_provvisorio=nuovo_temp,
+            numero_batch_previsti=batch_da_trasferire,
+            fase=Produzione.Fase.PREPARAZIONE,
+            stato_roboqubo=Produzione.StatoRoboqubo.SOSPESA,
+            invasettamento_congelato=True,
+            derivata_da=produzione,
+            bloccata_da_nc=nc,
+            note=f"Produzione creata automaticamente dalla NC-{nc.pk}.",
+        )
+        nuova_produzione.quantita_teorica_kg = calcola_quantita_teorica_ricetta(nuova_produzione)
+        nuova_produzione.save(update_fields=["quantita_teorica_kg"])
+
+        batch_da_spostare = list(
+            produzione.batch.filter(numero__gte=batch.numero, tank__isnull=True).order_by("numero")
+        )
+        for nuovo_numero, batch_da_spostare_singolo in enumerate(batch_da_spostare, start=1):
+            batch_da_spostare_singolo.produzione = nuova_produzione
+            batch_da_spostare_singolo.numero = nuovo_numero
+            batch_da_spostare_singolo.stato = (
+                BatchProduzione.Stato.QUARANTENA
+                if batch_da_spostare_singolo.pk == batch.pk
+                else BatchProduzione.Stato.SOSPESO
+            )
+            batch_da_spostare_singolo.save(update_fields=["produzione", "numero", "stato"])
+
+        for numero_mancante in range(len(batch_da_spostare) + 1, batch_da_trasferire + 1):
+            BatchProduzione.objects.create(
+                produzione=nuova_produzione,
+                numero=numero_mancante,
+                stato=BatchProduzione.Stato.SOSPESO,
+            )
+
+        batch_materiali_residui = max(batch_previsti_originali - batch.numero, 0)
+        rapporto_materiali = Decimal(batch_materiali_residui) / Decimal(batch_previsti_originali)
+        rapporto_escluso_originale = Decimal(batch_da_trasferire) / Decimal(batch_previsti_originali)
+        scadenza_massima = oggi + timedelta(days=7)
+        ricetta = produzione.articolo.ricette.filter(attiva=True).first()
+        ingredienti_ids = set(
+            ricetta.righe.filter(ingrediente_prodotto=True).values_list("articolo_id", flat=True)
+        )
+        for prelievo in produzione.prelievi.select_related(
+            "lotto__articolo", "lotto__fornitore",
+        ).filter(lotto__articolo_id__in=ingredienti_ids):
+            quantita = (prelievo.quantita_prelevata * rapporto_materiali).quantize(Decimal("0.000001"))
+            quantita_esclusa = (
+                prelievo.quantita_prelevata * rapporto_escluso_originale
+            ).quantize(Decimal("0.000001"))
+            prelievo.quantita_trasferita_nc += quantita_esclusa
+            prelievo.save(update_fields=["quantita_trasferita_nc"])
+            if quantita <= 0:
+                continue
+            origine = prelievo.lotto
+            nuova_scadenza = min(
+                (data for data in (origine.data_scadenza, scadenza_massima) if data is not None),
+                default=scadenza_massima,
+            )
+            base_codice = f"{origine.codice_lotto}-NC{nc.pk}"[:50]
+            codice = base_codice
+            indice = 1
+            while Lotto.objects.filter(articolo=origine.articolo, codice_lotto=codice).exists():
+                indice += 1
+                suffisso = f"-{indice}"
+                codice = f"{base_codice[:50-len(suffisso)]}{suffisso}"
+            lotto_recuperato = Lotto.objects.create(
+                articolo=origine.articolo,
+                codice_lotto=codice,
+                tipo=origine.tipo,
+                fornitore=origine.fornitore,
+                data_arrivo=origine.data_arrivo,
+                data_produzione=origine.data_produzione,
+                data_scadenza=nuova_scadenza,
+                quantita_iniziale=quantita,
+                peso_unita_acquisto=origine.peso_unita_acquisto,
+                note=f"Trasferito alla produzione {nuovo_temp} per NC-{nc.pk}.",
+            )
+            movimento_quarantena = registra_carico(
+                lotto=lotto_recuperato,
+                quantita=quantita,
+                ubicazione=ubicazione_produzione,
+                causale=f"Trasferimento materiali a {nuovo_temp} per NC-{nc.pk}",
+                operatore=operatore,
+            )
+            movimento_quarantena.tipo = Movimento.Tipo.QUARANTENA
+            movimento_quarantena.save(update_fields=["tipo"])
+            riferimento_articolo = f"{origine.articolo.codice} {origine.articolo.descrizione}".lower()
+            MaterialeSospesoNonConformita.objects.create(
+                non_conformita=nc,
+                prelievo=prelievo,
+                lotto_recuperato=lotto_recuperato,
+                quantita=quantita,
+                descrizione_miscela=(
+                    "Premiscela zucchero / acido ascorbico"
+                    if "zuccher" in riferimento_articolo or "ascorb" in riferimento_articolo else ""
+                ),
+                esito=MaterialeSospesoNonConformita.Esito.CONSERVA,
+                nuova_data_scadenza=nuova_scadenza,
+                note=f"Disponibile nel Magazzino produzione per {nuovo_temp}.",
+            )
+
+        produzione.numero_batch_previsti = batch_precedenti
+        produzione.quantita_teorica_kg = calcola_quantita_teorica_ricetta(produzione)
+        produzione.fase = Produzione.Fase.INVASETTAMENTO
+        produzione.stato_roboqubo = Produzione.StatoRoboqubo.CONCLUSA
+        produzione.roboqubo_chiuso_il = timezone.now()
+        produzione.invasettamento_congelato = False
+        produzione.chiusa_per_nc = True
+        produzione.save(update_fields=[
+            "numero_batch_previsti", "quantita_teorica_kg", "fase", "stato_roboqubo", "roboqubo_chiuso_il",
+            "invasettamento_congelato", "chiusa_per_nc",
+        ])
+        nc.note_apertura = (
+            f"Batch residui trasferiti alla produzione {nuovo_temp}; materiali residui "
+            "trasferiti nel Magazzino produzione."
+        )
+        nc.save(update_fields=["note_apertura"])
+    return nc
+
+
+@transaction.atomic
+def risolvi_non_conformita_batch(non_conformita, esito_batch, decisioni_materiali, responsabile):
+    nc = NonConformitaLotto.objects.select_for_update().select_related("batch", "produzione").get(
+        pk=non_conformita.pk,
+    )
+    if not nc.batch_id or not nc.produzione_id:
+        raise ValueError("La non conformità non riguarda un batch RoboQubo.")
+    if esito_batch not in {"SCARTA", "REINTEGRA"}:
+        raise ValueError("Indicare se il batch deve essere scartato o reintegrato.")
+
+    batch = nc.batch
+    produzione = nc.produzione
+    batch.stato = (
+        BatchProduzione.Stato.SCARTATO
+        if esito_batch == "SCARTA" else BatchProduzione.Stato.CONFORME
+    )
+    if esito_batch == "SCARTA":
+        batch.ora_inizio = None
+        batch.ora_fine = None
+    else:
+        batch.esito_conformita = "C"
+    batch.risolto_il = timezone.now()
+    batch.save(update_fields=[
+        "stato", "esito_conformita", "ora_inizio", "ora_fine", "risolto_il",
+    ])
+
+    materiali = list(nc.materiali_sospesi.select_related("prelievo__lotto__articolo"))
+    contiene_scarti = False
+    if materiali:
+        for materiale in materiali:
+            dati = decisioni_materiali.get(materiale.pk, {})
+            esito = dati.get("esito")
+            if esito not in dict(MaterialeSospesoNonConformita.Esito.choices) or esito == MaterialeSospesoNonConformita.Esito.DA_VALUTARE:
+                raise ValueError(
+                    f"Indicare la decisione per {materiale.prelievo.lotto.articolo.codice}."
+                )
+            materiale.esito = esito
+            materiale.note = (dati.get("note") or "").strip()
+            materiale.nuova_data_scadenza = dati.get("nuova_data_scadenza")
+            if esito == MaterialeSospesoNonConformita.Esito.SCARTA:
+                contiene_scarti = True
+            materiale.save(update_fields=["esito", "note", "nuova_data_scadenza"])
+
+        if contiene_scarti:
+            ubicazione_produzione = Ubicazione.objects.filter(
+                tipo_magazzino=Ubicazione.TipoMagazzino.PRODUZIONE,
+                attiva=True,
+            ).order_by("id").first()
+            if ubicazione_produzione is None:
+                raise ValueError("Non è configurata un'ubicazione attiva di Magazzino produzione.")
+            for materiale in materiali:
+                if materiale.esito == MaterialeSospesoNonConformita.Esito.SCARTA:
+                    continue
+                if not materiale.nuova_data_scadenza:
+                    raise ValueError(
+                        "Indicare la nuova scadenza di tutti i materiali recuperabili."
+                    )
+                origine = materiale.prelievo.lotto
+                base_codice = f"{origine.codice_lotto}-NC{nc.pk}"[:50]
+                codice = base_codice
+                progressivo = 1
+                while Lotto.objects.filter(articolo=origine.articolo, codice_lotto=codice).exists():
+                    progressivo += 1
+                    suffisso = f"-{progressivo}"
+                    codice = f"{base_codice[:50-len(suffisso)]}{suffisso}"
+                lotto_recupero = Lotto.objects.create(
+                    articolo=origine.articolo,
+                    codice_lotto=codice,
+                    tipo=origine.tipo,
+                    fornitore=origine.fornitore,
+                    data_arrivo=origine.data_arrivo,
+                    data_produzione=origine.data_produzione,
+                    data_scadenza=materiale.nuova_data_scadenza,
+                    quantita_iniziale=materiale.quantita,
+                    peso_unita_acquisto=origine.peso_unita_acquisto,
+                    note=f"Materiale recuperato dalla produzione {produzione.pk}, NC-{nc.pk}.",
+                )
+                registra_carico(
+                    lotto=lotto_recupero,
+                    quantita=materiale.quantita,
+                    ubicazione=ubicazione_produzione,
+                    causale=f"Recupero materiale sospeso NC-{nc.pk}",
+                    note=materiale.note,
+                    operatore=responsabile,
+                )
+                materiale.esito = MaterialeSospesoNonConformita.Esito.CONSERVA
+                materiale.save(update_fields=["esito"])
+            produzione.chiusa_per_nc = True
+            produzione.stato_roboqubo = Produzione.StatoRoboqubo.CONCLUSA
+            produzione.fase = Produzione.Fase.INVASETTAMENTO
+            produzione.roboqubo_chiuso_il = timezone.now()
+            produzione.batch.filter(stato=BatchProduzione.Stato.SOSPESO).update(
+                stato=BatchProduzione.Stato.SCARTATO,
+                risolto_il=timezone.now(),
+            )
+        else:
+            produzione.richiede_lotto_ripresa = True
+            produzione.stato_roboqubo = Produzione.StatoRoboqubo.NORMALE
+            produzione.batch.filter(stato=BatchProduzione.Stato.SOSPESO).update(
+                stato=BatchProduzione.Stato.CONFORME,
+            )
+    else:
+        produzione.stato_roboqubo = Produzione.StatoRoboqubo.NORMALE
+
+    nc.stato = NonConformitaLotto.Stato.CHIUSA
+    nc.gestita_da = responsabile
+    nc.data_chiusura = timezone.now()
+    nc.save(update_fields=["stato", "gestita_da", "data_chiusura"])
+    nc_aperte = produzione.non_conformita.exclude(stato=NonConformitaLotto.Stato.CHIUSA)
+    if not nc_aperte.exists():
+        produzione.invasettamento_congelato = False
+        produzione.stato_invasettamento = (
+            Produzione.StatoInvasettamento.IN_CORSO
+            if produzione.moca_igienizzati or produzione.carrelli.exists()
+            else Produzione.StatoInvasettamento.NON_AVVIATO
+        )
+    elif nc_aperte.filter(produzione_puo_proseguire=False).exists():
+        produzione.stato_roboqubo = Produzione.StatoRoboqubo.SOSPESA
+    else:
+        produzione.stato_roboqubo = Produzione.StatoRoboqubo.CON_NC
+    produzione.save(update_fields=[
+        "stato_roboqubo", "invasettamento_congelato", "richiede_lotto_ripresa", "chiusa_per_nc",
+        "fase", "roboqubo_chiuso_il",
+        "stato_invasettamento",
+    ])
+    return nc
+
+
+@transaction.atomic
+def risolvi_nc_produzione_derivata(
+    non_conformita, esito_batch, decisioni_materiali, responsabile,
+):
+    nc = NonConformitaLotto.objects.select_for_update().select_related("batch").get(
+        pk=non_conformita.pk,
+    )
+    produzione = Produzione.objects.select_for_update().filter(bloccata_da_nc=nc).first()
+    if produzione is None:
+        raise ValueError("Non esiste una produzione derivata bloccata da questa NC.")
+    if esito_batch not in {"SCARTA", "REINTEGRA"}:
+        raise ValueError("Indicare la decisione sul batch in quarantena.")
+
+    materiali = list(
+        nc.materiali_sospesi.select_related("lotto_recuperato__articolo").all()
+    )
+    almeno_uno_scartato = False
+    for materiale in materiali:
+        dati = decisioni_materiali.get(materiale.pk, {})
+        esito = dati.get("esito")
+        if esito not in {
+            MaterialeSospesoNonConformita.Esito.RIUTILIZZA,
+            MaterialeSospesoNonConformita.Esito.SCARTA,
+        }:
+            raise ValueError(
+                f"Indicare Scarto o Reintegro per {materiale.prelievo.lotto.articolo.codice}."
+            )
+        materiale.esito = esito
+        materiale.note = (dati.get("note") or "").strip()
+        materiale.save(update_fields=["esito", "note"])
+        almeno_uno_scartato = almeno_uno_scartato or esito == MaterialeSospesoNonConformita.Esito.SCARTA
+
+    batch = nc.batch
+    batch.stato = (
+        BatchProduzione.Stato.SCARTATO
+        if esito_batch == "SCARTA" else BatchProduzione.Stato.CONFORME
+    )
+    if esito_batch == "SCARTA":
+        batch.ora_inizio = None
+        batch.ora_fine = None
+    else:
+        batch.esito_conformita = "C"
+    batch.risolto_il = timezone.now()
+    batch.save(update_fields=[
+        "stato", "esito_conformita", "ora_inizio", "ora_fine", "risolto_il",
+    ])
+
+    deve_abortire = almeno_uno_scartato or (
+        esito_batch == "SCARTA" and not produzione.batch.exclude(pk=batch.pk).exists()
+    )
+    if deve_abortire:
+        for materiale in materiali:
+            if materiale.esito != MaterialeSospesoNonConformita.Esito.SCARTA:
+                materiale.esito = MaterialeSospesoNonConformita.Esito.CONSERVA
+                materiale.save(update_fields=["esito"])
+                continue
+            if materiale.lotto_recuperato_id is None:
+                raise ValueError("Manca il lotto recuperato del materiale da scartare.")
+            for giacenza in Giacenza.objects.select_for_update().filter(
+                lotto=materiale.lotto_recuperato, quantita__gt=0,
+            ):
+                quantita_scartata = giacenza.quantita
+                giacenza.quantita = Decimal("0")
+                giacenza.save(update_fields=["quantita"])
+                Movimento.objects.create(
+                    tipo=Movimento.Tipo.SCARTO_NC,
+                    lotto=materiale.lotto_recuperato,
+                    quantita=quantita_scartata,
+                    ubicazione_origine=giacenza.ubicazione,
+                    scaffale_origine=giacenza.scaffale,
+                    piano_origine=giacenza.piano,
+                    causale=f"Scarto materiale e aborto {produzione.lotto_provvisorio} per NC-{nc.pk}",
+                    note=materiale.note,
+                    eseguito_da=responsabile,
+                )
+        produzione.stato = Produzione.Stato.ABORTITA
+        produzione.fase = Produzione.Fase.COMPLETATA
+        produzione.chiusa_per_nc = True
+        produzione.invasettamento_congelato = False
+        produzione.stato_roboqubo = Produzione.StatoRoboqubo.CONCLUSA
+        produzione.stato_invasettamento = Produzione.StatoInvasettamento.CONCLUSO
+        produzione.save(update_fields=[
+            "stato", "fase", "chiusa_per_nc", "invasettamento_congelato", "stato_roboqubo",
+            "stato_invasettamento",
+        ])
+    else:
+        for materiale in materiali:
+            lotto = materiale.lotto_recuperato
+            if lotto is None:
+                raise ValueError("Manca il lotto recuperato di un materiale da reintegrare.")
+            giacenze = list(
+                Giacenza.objects.select_for_update().filter(lotto=lotto, quantita__gt=0)
+            )
+            quantita_disponibile = sum((g.quantita for g in giacenze), Decimal("0"))
+            if quantita_disponibile < materiale.quantita:
+                raise ValueError(f"Giacenza insufficiente per reintegrare {lotto.articolo.codice}.")
+            residuo = materiale.quantita
+            for giacenza in giacenze:
+                prelevata = min(giacenza.quantita, residuo)
+                if prelevata <= 0:
+                    continue
+                giacenza.quantita -= prelevata
+                giacenza.save(update_fields=["quantita"])
+                Movimento.objects.create(
+                    tipo=Movimento.Tipo.REINTEGRO,
+                    lotto=lotto,
+                    quantita=prelevata,
+                    ubicazione_origine=giacenza.ubicazione,
+                    scaffale_origine=giacenza.scaffale,
+                    piano_origine=giacenza.piano,
+                    causale=f"Reintegro nella produzione {produzione.lotto_provvisorio} dopo NC-{nc.pk}",
+                    note=materiale.note,
+                    eseguito_da=responsabile,
+                )
+                PrelievoProduzione.objects.create(
+                    produzione=produzione,
+                    lotto=lotto,
+                    ubicazione_origine=giacenza.ubicazione,
+                    scaffale_origine=giacenza.scaffale,
+                    piano_origine=giacenza.piano,
+                    quantita_prelevata=prelevata,
+                    quantita_movimentata=prelevata,
+                    quantita_scarto=Decimal("0"),
+                    note=f"Materiale reintegrato dalla NC-{nc.pk}. {materiale.note}".strip(),
+                )
+                residuo -= prelevata
+                if residuo <= 0:
+                    break
+
+        if esito_batch == "SCARTA":
+            produzione.numero_batch_previsti = max(
+                produzione.numero_batch_previsti - 1, 0,
+            )
+            produzione.quantita_teorica_kg = calcola_quantita_teorica_ricetta(produzione)
+        if esito_batch == "REINTEGRA":
+            ricetta = produzione.articolo.ricette.filter(attiva=True).first()
+            if ricetta is not None:
+                produzione.quantita_batch_reintegrato_kg = sum(
+                    ricetta.righe.filter(ingrediente_prodotto=True).values_list("quantita", flat=True),
+                    Decimal("0"),
+                )
+        produzione.batch.filter(stato=BatchProduzione.Stato.SOSPESO).update(
+            stato=BatchProduzione.Stato.DA_LAVORARE,
+        )
+        produzione.preparazione_chiusa_il = timezone.now()
+        produzione.fase = Produzione.Fase.ROBOQUBO
+        produzione.stato_roboqubo = Produzione.StatoRoboqubo.NORMALE
+        produzione.invasettamento_congelato = False
+        produzione.save(update_fields=[
+            "preparazione_chiusa_il", "fase", "stato_roboqubo",
+            "invasettamento_congelato", "quantita_batch_reintegrato_kg",
+            "numero_batch_previsti", "quantita_teorica_kg",
+        ])
+
+    nc.stato = NonConformitaLotto.Stato.CHIUSA
+    nc.gestita_da = responsabile
+    nc.data_chiusura = timezone.now()
+    nc.save(update_fields=["stato", "gestita_da", "data_chiusura"])
+    produzione_origine = Produzione.objects.get(pk=nc.produzione_id)
+    produzione_origine.invasettamento_congelato = False
+    produzione_origine.stato_invasettamento = (
+        Produzione.StatoInvasettamento.IN_CORSO
+        if produzione_origine.moca_igienizzati or produzione_origine.carrelli.exists()
+        else Produzione.StatoInvasettamento.NON_AVVIATO
+    )
+    produzione_origine.save(update_fields=[
+        "invasettamento_congelato", "stato_invasettamento",
+    ])
+    return produzione
 
 
 @transaction.atomic
@@ -533,6 +1240,37 @@ def genera_codice_lotto_produzione(articolo, data_produzione):
     return codice
 
 
+def genera_codice_lotto_ripresa(articolo, data_produzione):
+    base = data_produzione.strftime("%y%m%d")
+    progressivo = 1
+    codice = f"{progressivo}{base}"
+    while Lotto.objects.filter(articolo=articolo, codice_lotto=codice).exists():
+        progressivo += 1
+        codice = f"{progressivo}{base}"
+    return codice
+
+
+def genera_codice_lotto_per_produzione(produzione, data_conferma):
+    """Propone il lotto definitivo rispettando l'eventuale prefisso della bozza NC."""
+    lotto_temporaneo = (produzione.lotto_provvisorio or "").strip().upper()
+    parti = lotto_temporaneo.partition("TEMP")
+    if parti[1] and parti[0].isdigit() and len(parti[2]) == 6 and parti[2].isdigit():
+        progressivo = int(parti[0])
+        base = parti[2]
+        codice = f"{progressivo}{base}"
+        while Lotto.objects.filter(
+            articolo=produzione.articolo,
+            codice_lotto=codice,
+        ).exists():
+            progressivo += 1
+            codice = f"{progressivo}{base}"
+        return codice
+
+    if produzione.richiede_lotto_ripresa and produzione.lotti_uscita.exists():
+        return genera_codice_lotto_ripresa(produzione.articolo, data_conferma)
+    return genera_codice_lotto_produzione(produzione.articolo, data_conferma)
+
+
 @transaction.atomic
 def avvia_produzione(
     articolo,
@@ -567,12 +1305,15 @@ def avvia_produzione(
             f"La ricetta {ricetta.nome} non contiene ingredienti."
         )
 
-    return Produzione.objects.create(
+    produzione = Produzione.objects.create(
         articolo=articolo,
         data_produzione=data_produzione,
         stato=Produzione.Stato.BOZZA,
         note=note,
     )
+    produzione.quantita_teorica_kg = calcola_quantita_teorica_ricetta(produzione)
+    produzione.save(update_fields=["quantita_teorica_kg"])
+    return produzione
 
 
 def _articolo_ammesso_in_produzione(produzione, articolo):
@@ -935,7 +1676,8 @@ def chiudi_preparazione_produzione(produzione, quantita_per_articolo, note_per_a
         creati.extend(creati_riga)
     produzione.fase = Produzione.Fase.ROBOQUBO
     produzione.preparazione_chiusa_il = timezone.now()
-    produzione.save(update_fields=["fase", "preparazione_chiusa_il"])
+    produzione.quantita_teorica_kg = calcola_quantita_teorica_ricetta(produzione)
+    produzione.save(update_fields=["fase", "preparazione_chiusa_il", "quantita_teorica_kg"])
     return creati
 
 
@@ -1122,21 +1864,31 @@ def conferma_produzione(
             "La produzione ha già un lotto associato."
         )
 
-    if not produzione.tank.filter(annullato=False).exists():
+    if produzione.stato_roboqubo != Produzione.StatoRoboqubo.CONCLUSA:
+        raise ValueError(
+            "La produzione non può essere chiusa finché RoboQubo non è concluso."
+        )
+
+    tank_correnti = produzione.tank.filter(
+        annullato=False,
+        stato_invasettamento=TankProduzione.StatoInvasettamento.DISPONIBILE,
+    )
+    if not tank_correnti.exists():
         raise ValueError("Non è stato registrato alcun tank.")
 
-    if produzione.tank.filter(annullato=False).filter(
+    if tank_correnti.filter(
         Q(gradi_brix__isnull=True) | Q(ph__isnull=True)
     ).exists():
         raise ValueError("Completa i controlli Brix e pH di tutti i tank.")
 
     if not produzione.moca_igienizzati:
         raise ValueError("Conferma pulizia e igienizzazione degli imballaggi MOCA.")
-    if not produzione.carrelli.exists():
+    carrelli_correnti = produzione.carrelli.filter(lotto_uscita__isnull=True)
+    if not carrelli_correnti.exists():
         raise ValueError("Registra almeno un carrello di invasettamento.")
-    if produzione.carrelli.filter(chiuso_il__isnull=True).exists():
+    if carrelli_correnti.filter(chiuso_il__isnull=True).exists():
         raise ValueError("Completa tutti i carrelli prima di chiudere la lavorazione.")
-    ultimo_carrello = produzione.carrelli.order_by("-numero").first()
+    ultimo_carrello = carrelli_correnti.order_by("-numero").first()
     produzione.pastorizzazione_completata = True
     produzione.vuoto_controllato = True
     produzione.data_ora_pastorizzazione = ultimo_carrello.pastorizzazione_registrata_il
@@ -1174,7 +1926,7 @@ def conferma_produzione(
     prelievi_validi = produzione.prelievi.filter(
         Q(tank__isnull=True) | Q(tank__annullato=False)
     )
-    if not prelievi_validi.exists():
+    if not prelievi_validi.exists() and produzione.quantita_batch_reintegrato_kg <= 0:
         raise ValueError(
             "Non sono stati registrati prelievi per questa produzione."
         )
@@ -1205,18 +1957,7 @@ def conferma_produzione(
     prelievi = list(
         prelievi_validi.select_related("lotto__articolo")
     )
-    ingredienti_ids = set(
-        ricetta.righe.filter(ingrediente_prodotto=True)
-        .values_list("articolo_id", flat=True)
-    )
-    quantita_teorica_kg = sum(
-        (
-            prelievo.quantita_prelevata
-            for prelievo in prelievi
-            if prelievo.lotto.articolo_id in ingredienti_ids
-        ),
-        Decimal("0"),
-    )
+    quantita_teorica_kg = calcola_quantita_teorica_ricetta(produzione)
     resa_percentuale = (
         quantita_ottenuta_kg / quantita_teorica_kg * Decimal("100")
         if quantita_teorica_kg > 0 else None
@@ -1226,6 +1967,7 @@ def conferma_produzione(
     for prelievo in prelievi:
         quantita_utilizzata = (
             prelievo.quantita_prelevata
+            - prelievo.quantita_trasferita_nc
             - prelievo.quantita_scarto
         )
         articolo_id = prelievo.lotto.articolo_id
@@ -1243,7 +1985,7 @@ def conferma_produzione(
                 f"{riga.articolo.codice} - {riga.articolo.descrizione}"
             )
 
-    if ingredienti_mancanti:
+    if ingredienti_mancanti and produzione.quantita_batch_reintegrato_kg <= 0:
         raise ValueError(
             "Non è possibile confermare la produzione. "
             "Mancano prelievi effettivamente utilizzati per: "
@@ -1346,10 +2088,9 @@ def conferma_produzione(
     produzione.quantita_teorica_kg = quantita_teorica_kg
     produzione.resa_percentuale = resa_percentuale
     produzione.fase = Produzione.Fase.COMPLETATA
-    if produzione.roboqubo_chiuso_il is None:
-        produzione.roboqubo_chiuso_il = timezone.now()
     produzione.ubicazione_destinazione = ubicazione_destinazione
     produzione.stato = Produzione.Stato.CONFERMATA
+    produzione.stato_invasettamento = Produzione.StatoInvasettamento.CONCLUSO
     produzione.pezzi_difettosi_finali = pezzi_difettosi_finali
     produzione.capsule_difettose_finali = capsule_difettose_finali
     produzione.difetti_registrati_il = timezone.now()
@@ -1366,9 +2107,9 @@ def conferma_produzione(
             "quantita_teorica_kg",
             "resa_percentuale",
             "fase",
-            "roboqubo_chiuso_il",
             "ubicazione_destinazione",
             "stato",
+            "stato_invasettamento",
             "pastorizzazione_completata",
             "vuoto_controllato",
             "data_ora_pastorizzazione",
@@ -1379,6 +2120,27 @@ def conferma_produzione(
             "note",
         ]
     )
+
+    uscita = LottoUscitaProduzione.objects.create(
+        produzione=produzione,
+        lotto=lotto,
+        provvisorio=False,
+        numero_vasetti_buoni=int(quantita_prodotta),
+        numero_vasetti_scartati=int(pezzi_difettosi_finali),
+        numero_capsule_difettose=int(capsule_difettose_finali),
+        peso_netto_vasetto_g=peso_netto_vasetto_g,
+        quantita_ottenuta_kg=quantita_ottenuta_kg,
+        quantita_teorica_kg=quantita_teorica_kg,
+        resa_percentuale=resa_percentuale,
+        note=note,
+    )
+    produzione.tank.filter(
+        stato_invasettamento=TankProduzione.StatoInvasettamento.DISPONIBILE,
+    ).update(
+        stato_invasettamento=TankProduzione.StatoInvasettamento.INVASETTATO,
+        invasettato_il=timezone.now(),
+    )
+    produzione.carrelli.filter(lotto_uscita__isnull=True).update(lotto_uscita=uscita)
 
     return produzione
 

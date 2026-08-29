@@ -1,0 +1,32 @@
+{% extends "magazzino/base.html" %}
+
+{% block title %}Azzeramento dati magazzino - MIRA{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h2>Azzeramento dati magazzino</h2>
+        <p>Questa funzione è riservata all’amministratore.</p>
+    </div>
+</div>
+
+<div class="form-card">
+    <div class="message error">
+        <strong>Attenzione: l’operazione è irreversibile.</strong><br>
+        Verranno eliminati articoli, fornitori, ubicazioni, lotti, giacenze,
+        movimenti, ricette, produzioni, invasettamenti, non conformità e registro operazioni.
+        Utenti, amministratori, gruppi e permessi resteranno invariati.
+    </div>
+    <form method="post">
+        {% csrf_token %}
+        <p>
+            <label for="id_conferma"><strong>Per confermare scrivi AZZERA</strong></label><br>
+            <input id="id_conferma" type="text" name="conferma" autocomplete="off" required>
+        </p>
+        <div class="form-actions">
+            <button type="submit" class="btn btn-danger">Azzera tutte le tabelle di magazzino</button>
+            <a href="{% url 'home' %}" class="btn btn-secondary">Annulla</a>
+        </div>
+    </form>
+</div>
+{% endblock %}
