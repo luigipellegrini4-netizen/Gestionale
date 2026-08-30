@@ -23,6 +23,12 @@ from decimal import Decimal, ROUND_HALF_UP
 
 class CaricoLottoForm(forms.Form):
 
+    ricerca_articolo = forms.CharField(
+        required=False,
+        label="Cerca articolo",
+        widget=forms.TextInput(attrs={"placeholder": "Codice o descrizione"}),
+    )
+
     articolo = forms.ModelChoiceField(
         queryset=Articolo.objects.filter(
             attivo=True,
@@ -81,6 +87,13 @@ class CaricoLottoForm(forms.Form):
         min_value=Decimal("0.000001"),
         required=False,
         label="Peso della singola unità di acquisto (kg)",
+    )
+
+    capacita_imballo = forms.IntegerField(
+        min_value=1,
+        required=False,
+        label="Capacità del singolo imballo",
+        help_text="Solo per scatole e cofanetti: numero di prodotti contenuti.",
     )
 
     fattura = forms.CharField(
@@ -154,6 +167,14 @@ class CaricoLottoForm(forms.Form):
     )
 
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        ricerca = (self.data.get("ricerca_articolo") or "").strip()
+        if ricerca:
+            self.fields["articolo"].queryset = self.fields["articolo"].queryset.filter(
+                Q(codice__icontains=ricerca) | Q(descrizione__icontains=ricerca)
+            )
+
     def clean(self):
         cleaned_data = super().clean()
         errori = []
@@ -175,6 +196,19 @@ class CaricoLottoForm(forms.Form):
         numero_colli = cleaned_data.get("numero_colli")
         uda_per_collo = cleaned_data.get("unita_acquisto_per_collo")
         peso_uda = cleaned_data.get("peso_unita_acquisto")
+        capacita_imballo = cleaned_data.get("capacita_imballo")
+        if (
+            articolo is not None
+            and articolo.tipo_packaging in {
+                Articolo.TipoPackaging.SCATOLA,
+                Articolo.TipoPackaging.COFANETTO,
+            }
+            and capacita_imballo is None
+        ):
+            self.add_error(
+                "capacita_imballo",
+                "Indicare quanti prodotti contiene la singola scatola o il cofanetto.",
+            )
         valori_presenti = sum(
             valore is not None
             for valore in (numero_colli, uda_per_collo, peso_uda)
@@ -226,6 +260,12 @@ class CaricoLottoForm(forms.Form):
 
 
 class TrasferimentoForm(forms.Form):
+
+    ricerca_articolo = forms.CharField(
+        required=False,
+        label="Cerca articolo",
+        widget=forms.TextInput(attrs={"placeholder": "Codice o descrizione"}),
+    )
 
     articolo = forms.ModelChoiceField(
         queryset=Articolo.objects.filter(attivo=True).order_by(
@@ -280,6 +320,11 @@ class TrasferimentoForm(forms.Form):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        ricerca = (self.data.get("ricerca_articolo") or "").strip()
+        if ricerca:
+            self.fields["articolo"].queryset = self.fields["articolo"].queryset.filter(
+                Q(codice__icontains=ricerca) | Q(descrizione__icontains=ricerca)
+            )
         articolo_id = self.data.get("articolo") or self.initial.get(
             "articolo"
         )
@@ -301,7 +346,6 @@ class TrasferimentoForm(forms.Form):
                     )
                     .order_by("lotto__codice_lotto", "ubicazione__nome")
                 )
-
     def clean(self):
         cleaned_data = super().clean()
         articolo = cleaned_data.get("articolo")
@@ -337,6 +381,14 @@ class TrasferimentoForm(forms.Form):
 
 
 class ConsumoForm(forms.Form):
+
+    ricerca_lotto = forms.CharField(
+        required=False,
+        label="Cerca lotto",
+        widget=forms.TextInput(
+            attrs={"placeholder": "Codice lotto, codice o descrizione articolo"},
+        ),
+    )
 
     lotto = forms.ModelChoiceField(
         queryset=Lotto.objects.select_related(
@@ -390,6 +442,69 @@ class ConsumoForm(forms.Form):
             },
         ),
     )
+
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        ricerca = (self.data.get("ricerca_lotto") or "").strip()
+        if ricerca:
+            self.fields["lotto"].queryset = self.fields["lotto"].queryset.filter(
+                Q(codice_lotto__icontains=ricerca)
+                | Q(articolo__codice__icontains=ricerca)
+                | Q(articolo__descrizione__icontains=ricerca)
+            )
+
+
+class GiacenzaRettificaChoiceField(forms.ModelChoiceField):
+    def label_from_instance(self, giacenza):
+        posizione = giacenza.ubicazione.nome
+        if giacenza.scaffale:
+            posizione += f" · Scaffale {giacenza.scaffale}"
+        if giacenza.piano:
+            posizione += f" · Piano {giacenza.piano}"
+        return (
+            f"{giacenza.lotto.articolo.codice} · lotto "
+            f"{giacenza.lotto.codice_visualizzato} · {posizione} · "
+            f"teorico {giacenza.quantita} {giacenza.lotto.articolo.unita_misura}"
+        )
+
+
+class RettificaInventarioForm(forms.Form):
+    ricerca_lotto = forms.CharField(
+        required=False,
+        label="Cerca lotto",
+        widget=forms.TextInput(
+            attrs={"placeholder": "Codice lotto, codice o descrizione articolo"},
+        ),
+    )
+    giacenza = GiacenzaRettificaChoiceField(
+        queryset=Giacenza.objects.select_related(
+            "lotto__articolo", "ubicazione",
+        ).order_by("lotto__articolo__codice", "lotto__codice_lotto", "ubicazione__nome"),
+        label="Lotto e posizione da rettificare",
+    )
+    quantita_reale = forms.DecimalField(
+        max_digits=12,
+        decimal_places=6,
+        min_value=Decimal("0"),
+        label="Quantità reale rilevata",
+    )
+    motivo = forms.CharField(max_length=200, label="Motivo della rettifica")
+    note = forms.CharField(
+        required=False,
+        label="Note",
+        widget=forms.Textarea(attrs={"rows": 3}),
+    )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        ricerca = (self.data.get("ricerca_lotto") or "").strip()
+        if ricerca:
+            self.fields["giacenza"].queryset = self.fields["giacenza"].queryset.filter(
+                Q(lotto__codice_lotto__icontains=ricerca)
+                | Q(lotto__articolo__codice__icontains=ricerca)
+                | Q(lotto__articolo__descrizione__icontains=ricerca)
+            )
 
 
 class GiacenzaNonConformitaChoiceField(forms.ModelChoiceField):
@@ -489,6 +604,7 @@ class GestioneNonConformitaLottoForm(forms.Form):
             "la data nel campo seguente."
         ),
     )
+
     scadenza_prevista = forms.DateField(
         required=False,
         label="Tempi previsti: oppure entro il",
@@ -496,19 +612,19 @@ class GestioneNonConformitaLottoForm(forms.Form):
         input_formats=["%Y-%m-%d"],
         widget=forms.DateInput(format="%Y-%m-%d", attrs={"type": "date"}),
     )
-    numero_uda_scartate = forms.IntegerField(
-        min_value=0,
+    quantita_scartata = forms.DecimalField(
+        min_value=Decimal("0"), max_digits=12, decimal_places=6,
         required=False,
-        label="Numero di UDA da scartare",
+        label="Quantità da scartare",
     )
-    numero_uda_reintegrate = forms.IntegerField(
-        min_value=0,
+    quantita_reintegrata = forms.DecimalField(
+        min_value=Decimal("0"), max_digits=12, decimal_places=6,
         required=False,
-        label="Numero di UDA da reintegrare",
+        label="Quantità da reintegrare",
     )
     decisione = forms.CharField(
         required=False,
-        label="Decisione sulle UDA in quarantena",
+        label="Motivazione della decisione sulla quarantena",
         widget=forms.Textarea(attrs={"rows": 4}),
     )
     esito_efficacia = forms.ChoiceField(
@@ -531,6 +647,12 @@ class GestioneNonConformitaLottoForm(forms.Form):
     def __init__(self, *args, non_conformita, **kwargs):
         super().__init__(*args, **kwargs)
         self.non_conformita = non_conformita
+        unita_nc = non_conformita.unita_quarantena or (
+            "UDA" if non_conformita.numero_uda_quarantena else
+            non_conformita.lotto.articolo.unita_misura if non_conformita.lotto_id else ""
+        )
+        self.fields["quantita_scartata"].label = f"Quantità da scartare ({unita_nc})"
+        self.fields["quantita_reintegrata"].label = f"Quantità da reintegrare ({unita_nc})"
         if not self.is_bound:
             oggi = date.today()
             for nome_data in ("data_inizio_gestione", "data_verifica"):
@@ -614,22 +736,29 @@ class GestioneNonConformitaLottoForm(forms.Form):
 
     def clean(self):
         cleaned_data = super().clean()
-        scartate = cleaned_data.get("numero_uda_scartate")
-        reintegrate = cleaned_data.get("numero_uda_reintegrate")
+        scartate = cleaned_data.get("quantita_scartata")
+        reintegrate = cleaned_data.get("quantita_reintegrata")
         if (
             self.data.get("azione") == "chiudi"
-            and self.non_conformita.numero_uda_quarantena
+            and self.non_conformita.quantita_quarantena
         ):
             if scartate is None or reintegrate is None:
                 raise forms.ValidationError(
-                    "Indicare quante UDA scartare e quante reintegrare."
+                    "Indicare la quantità da scartare e quella da reintegrare."
                 )
-            if scartate + reintegrate != self.non_conformita.numero_uda_quarantena:
+            totale = (
+                Decimal(self.non_conformita.numero_uda_quarantena)
+                if (self.non_conformita.unita_quarantena or "UDA") == "UDA"
+                else self.non_conformita.quantita_quarantena
+            )
+            if scartate + reintegrate != totale:
                 raise forms.ValidationError(
-                    "La somma delle UDA scartate e reintegrate deve coincidere "
-                    f"con le {self.non_conformita.numero_uda_quarantena} UDA "
-                    "in quarantena."
+                    "La somma delle quantità scartata e reintegrata deve "
+                    f"coincidere con la quantità in quarantena ({totale})."
                 )
+            if (self.non_conformita.unita_quarantena or "UDA") == "UDA":
+                if scartate != scartate.to_integral_value() or reintegrate != reintegrate.to_integral_value():
+                    raise forms.ValidationError("Le quantità espresse in UDA devono essere numeri interi.")
         if self.data.get("azione") == "chiudi":
             if self.non_conformita.batch_id and not cleaned_data.get("esito_batch"):
                 self.add_error("esito_batch", "Indicare la decisione sul batch non conforme.")
@@ -671,19 +800,25 @@ class AperturaNonConformitaGeneraleForm(forms.ModelForm):
     giacenza = GiacenzaNonConformitaChoiceField(
         queryset=Giacenza.objects.none(),
         required=False,
-        label="Posizione da mettere in quarantena",
+        label="Posizione da mettere in quarantena (facoltativa)",
+        empty_label="Nessuna posizione selezionata",
     )
-    numero_uda = forms.IntegerField(
-        min_value=1,
+    unita_quarantena = forms.ChoiceField(
         required=False,
-        label="Numero di UDA da mettere in quarantena",
+        choices=(("", "Seleziona"), ("UDA", "UDA"), ("KG", "kg")),
+        label="Unità della quarantena",
+    )
+    quantita_quarantena_input = forms.DecimalField(
+        min_value=Decimal("0.000001"), decimal_places=6, max_digits=12,
+        required=False,
+        label="Quantità da mettere in quarantena",
     )
 
     class Meta:
         model = NonConformitaLotto
         fields = [
             "ambito", "tipo_nc", "ricerca_lotto", "lotto", "giacenza",
-            "numero_uda", "motivo", "note_apertura",
+            "unita_quarantena", "quantita_quarantena_input", "motivo", "note_apertura",
         ]
         labels = {
             "ambito": "Segnalata in",
@@ -712,33 +847,43 @@ class AperturaNonConformitaGeneraleForm(forms.ModelForm):
         cleaned_data = super().clean()
         lotto = cleaned_data.get("lotto")
         giacenza = cleaned_data.get("giacenza")
-        numero_uda = cleaned_data.get("numero_uda")
-        if lotto:
-            if giacenza is None:
-                self.add_error(
-                    "giacenza",
-                    "Selezionare la posizione delle UDA da mettere in quarantena.",
+        unita = cleaned_data.get("unita_quarantena")
+        quantita_input = cleaned_data.get("quantita_quarantena_input")
+        if lotto and (unita or quantita_input):
+            if giacenza is None or not unita or quantita_input is None:
+                raise forms.ValidationError(
+                    "Per la quarantena occorre indicare posizione, unità e quantità. "
+                    "In alternativa lasciare vuoti unità e quantità; la posizione "
+                    "può essere registrata da sola."
                 )
-            if numero_uda is None:
-                self.add_error(
-                    "numero_uda",
-                    "Indicare il numero di UDA da mettere in quarantena.",
-                )
-            if lotto.quantita_singola_uda is None:
+            if unita == "UDA" and lotto.quantita_singola_uda is None:
                 self.add_error(
                     "lotto",
                     "Il lotto non ha la quantità della singola UDA registrata.",
                 )
-            elif giacenza and numero_uda:
-                quantita = Decimal(numero_uda) * lotto.quantita_singola_uda
+            elif unita == "UDA" and quantita_input != quantita_input.to_integral_value():
+                self.add_error(
+                    "quantita_quarantena_input",
+                    "Il numero di UDA deve essere un numero intero.",
+                )
+            elif unita == "KG" and lotto.articolo.unita_misura != Articolo.UnitaMisura.KG:
+                self.add_error(
+                    "unita_quarantena",
+                    "I kg possono essere usati solo per un articolo gestito in kilogrammi.",
+                )
+            else:
+                quantita = (
+                    quantita_input * lotto.quantita_singola_uda
+                    if unita == "UDA" else quantita_input
+                )
                 if quantita > giacenza.quantita:
                     self.add_error(
-                        "numero_uda",
-                        "Le UDA superano la giacenza disponibile nella posizione.",
+                        "quantita_quarantena_input",
+                        "La quantità supera la giacenza disponibile nella posizione.",
                     )
-        elif giacenza or numero_uda:
+        elif not lotto and (giacenza or unita or quantita_input):
             raise forms.ValidationError(
-                "Se sono indicate UDA in quarantena è necessario selezionare il lotto."
+                "Se è indicata una quantità in quarantena è necessario selezionare il lotto."
             )
         return cleaned_data
 
@@ -1057,7 +1202,7 @@ class BatchProduzioneForm(forms.Form):
     produzione_puo_proseguire = forms.ChoiceField(
         required=False,
         label="La produzione può proseguire con i batch successivi?",
-        choices=(("", "Seleziona"), ("SI", "Sì"), ("NO", "No, sospendi la fase RoboQubo")),
+        choices=(("", "Seleziona"), ("SI", "Sì"), ("NO", "No, sospendi la fase RoboQbo")),
         help_text="Obbligatorio quando il tracciato del batch è non conforme.",
     )
 
@@ -1548,12 +1693,8 @@ class ArticoloForm(forms.ModelForm):
             "nome_produzione",
             "categoria",
             "unita_misura",
-            "quantita_per_confezione",
-            "formato",
-            "unita_formato",
             "scorta_minima",
             "tipo_packaging",
-            "pezzi_per_imballo",
             "attivo",
             "tracciabilita_lotto",
             "note",
@@ -1565,49 +1706,15 @@ class ArticoloForm(forms.ModelForm):
             "nome_produzione": "Nome prodotto in ricette e produzione",
             "categoria": "Categoria",
             "unita_misura": "Unità di misura",
-            "quantita_per_confezione": "Unità per confezione di acquisto",
-            "formato": "Formato del singolo articolo",
-            "unita_formato": "Unità del formato",
             "scorta_minima": "Scorta minima",
             "tipo_packaging": "Tipo packaging",
-            "pezzi_per_imballo": "Confezioni per imballo",
             "attivo": "Articolo attivo",
             "tracciabilita_lotto": "Tracciabilità per lotto",
             "note": "Note",
         }
 
         help_texts = {
-            "quantita_per_confezione": (
-                "Quantità di unità contenute nella confezione di acquisto. "
-                "Esempio: 10 vasetti oppure 25 kg per confezione."
-            ),
-            "formato": "Esempio: 250 con unità g per un vasetto da 250 g.",
-            "pezzi_per_imballo": (
-                "Numero di confezioni contenute in un imballo. "
-                "Esempio: 25 sacchetti da 1 kg di zucchero per imballo."
-            ),
         }
-
-    def clean_quantita_per_confezione(self):
-        quantita = self.cleaned_data.get("quantita_per_confezione")
-        if quantita is not None and quantita <= 0:
-            raise forms.ValidationError(
-                "La quantità per confezione deve essere maggiore di zero."
-            )
-        return quantita
-
-    def clean(self):
-        cleaned_data = super().clean()
-        formato = cleaned_data.get("formato")
-        unita_formato = cleaned_data.get("unita_formato")
-        if formato is not None and formato <= 0:
-            self.add_error("formato", "Il formato deve essere maggiore di zero.")
-        if (formato is None) != (not unita_formato):
-            raise forms.ValidationError(
-                "Formato e unità del formato devono essere compilati insieme."
-            )
-        return cleaned_data
-
 
 class FornitoreForm(forms.ModelForm):
     class Meta:
@@ -1640,15 +1747,11 @@ class UbicazioneForm(forms.ModelForm):
         fields = [
             "nome",
             "tipo_magazzino",
-            "scaffale",
-            "piano",
             "attiva",
         ]
         labels = {
             "nome": "Nome",
             "tipo_magazzino": "Tipo magazzino",
-            "scaffale": "Scaffale",
-            "piano": "Piano",
             "attiva": "Ubicazione attiva",
         }
 

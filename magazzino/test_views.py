@@ -86,7 +86,6 @@ class SituazioneMagazzinoTests(TestCase):
             descrizione="Prodotto finito test",
             categoria=Articolo.Categoria.PRODOTTO_FINITO,
             unita_misura=Articolo.UnitaMisura.PZ,
-            quantita_per_confezione=Decimal("10"),
         )
         cls.imballo = Articolo.objects.create(
             codice="SCATOLA-TEST",
@@ -94,7 +93,6 @@ class SituazioneMagazzinoTests(TestCase):
             categoria=Articolo.Categoria.PACKAGING,
             unita_misura=Articolo.UnitaMisura.PZ,
             tipo_packaging=Articolo.TipoPackaging.SCATOLA,
-            pezzi_per_imballo=6,
         )
         cls.ubicazione_a = Ubicazione.objects.create(
             nome="Prodotti finiti A",
@@ -234,7 +232,8 @@ class SituazioneMagazzinoTests(TestCase):
                 "tipo_nc": NonConformitaLotto.Tipo.VERSO_FORNITORE,
                 "lotto": self.lotto_imballo.pk,
                 "giacenza": giacenza.pk,
-                "numero_uda": 2,
+                "unita_quarantena": "UDA",
+                "quantita_quarantena_input": 2,
                 "motivo": "Materiale non idoneo",
                 "note_apertura": "Isolamento immediato",
             },
@@ -247,6 +246,68 @@ class SituazioneMagazzinoTests(TestCase):
         self.assertEqual(nc.quantita_quarantena, Decimal("2.5"))
         self.assertEqual(giacenza.quantita, Decimal("7.5"))
 
+    def test_apertura_generale_collega_lotto_senza_quarantena(self):
+        self.user.user_permissions.add(
+            Permission.objects.get(codename="operare_magazzino")
+        )
+        self.client.force_login(self.user)
+
+        apertura = self.client.post(
+            reverse("apri_non_conformita_generale"),
+            {
+                "ambito": NonConformitaLotto.Ambito.PRODUZIONE,
+                "tipo_nc": NonConformitaLotto.Tipo.VERSO_FORNITORE,
+                "lotto": self.lotto_imballo.pk,
+                "giacenza": "",
+                "unita_quarantena": "",
+                "quantita_quarantena_input": "",
+                "motivo": "NC collegata senza quarantena",
+            },
+        )
+
+        self.assertRedirects(apertura, reverse("registro_non_conformita"))
+        nc = NonConformitaLotto.objects.get(
+            motivo="NC collegata senza quarantena"
+        )
+        self.assertEqual(nc.lotto, self.lotto_imballo)
+        self.assertIsNone(nc.quantita_quarantena)
+        self.assertIsNone(nc.numero_uda_quarantena)
+
+    def test_apertura_generale_registra_posizione_senza_quarantena(self):
+        giacenza = Giacenza.objects.create(
+            lotto=self.lotto_imballo,
+            ubicazione=self.ubicazione_a,
+            quantita=Decimal("10"),
+            scaffale="B",
+        )
+        self.user.user_permissions.add(
+            Permission.objects.get(codename="operare_magazzino")
+        )
+        self.client.force_login(self.user)
+
+        apertura = self.client.post(
+            reverse("apri_non_conformita_generale"),
+            {
+                "ambito": NonConformitaLotto.Ambito.PRODUZIONE,
+                "tipo_nc": NonConformitaLotto.Tipo.INTERNO,
+                "lotto": self.lotto_imballo.pk,
+                "giacenza": giacenza.pk,
+                "unita_quarantena": "",
+                "quantita_quarantena_input": "",
+                "motivo": "Posizione coinvolta senza quarantena",
+            },
+        )
+
+        self.assertRedirects(apertura, reverse("registro_non_conformita"))
+        nc = NonConformitaLotto.objects.get(
+            motivo="Posizione coinvolta senza quarantena"
+        )
+        self.assertEqual(nc.ubicazione_origine, self.ubicazione_a)
+        self.assertEqual(nc.scaffale_origine, "B")
+        self.assertIsNone(nc.quantita_quarantena)
+        giacenza.refresh_from_db()
+        self.assertEqual(giacenza.quantita, Decimal("10"))
+
     def test_articoli_sono_ordinati_e_separati_per_categoria(self):
 
         response = self.client.get(reverse("situazione_magazzino"))
@@ -258,7 +319,8 @@ class SituazioneMagazzinoTests(TestCase):
             [gruppo["nome"] for gruppo in response.context["gruppi_articoli"]],
             [
                 "Materia prima", "MOCA", "Semilavorato",
-                "Prodotto finito", "Igiene", "Consumabili",
+                "Prodotto finito", "Packaging", "Igiene", "Consumabili",
+                "Ricambi",
             ],
         )
         self.assertContains(response, 'class="category-group-header"', count=6)
@@ -279,15 +341,6 @@ class SituazioneMagazzinoTests(TestCase):
             dettaglio_articolo,
             reverse("dettaglio_lotto", args=[self.lotto_prodotto.pk]),
         )
-
-    def test_dettaglio_articolo_mostra_quantita_per_confezione(self):
-        response = self.client.get(
-            reverse("dettaglio_articolo", args=[self.prodotto.pk])
-        )
-
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Unità per confezione di acquisto")
-        self.assertContains(response, "10")
 
     def test_dettaglio_lotto_mostra_documenti_e_struttura_acquisto(self):
         response = self.client.get(
@@ -344,8 +397,8 @@ class SituazioneMagazzinoTests(TestCase):
         gestione = self.client.post(
             reverse("gestisci_non_conformita", args=[non_conformita.pk]),
             {
-                "numero_uda_scartate": 1,
-                "numero_uda_reintegrate": 1,
+                "quantita_scartata": 1,
+                "quantita_reintegrata": 1,
                 "decisione": "Una UDA recuperata e una scartata",
                 "analisi_cause": "Danno durante la movimentazione",
                 "azione_risoluzione": "Revisione della movimentazione",
@@ -374,22 +427,6 @@ class SituazioneMagazzinoTests(TestCase):
         )
         self.assertContains(dettaglio, f"NC-{non_conformita.pk}")
         self.assertContains(dettaglio, "Una UDA recuperata e una scartata")
-
-    def test_dettaglio_articolo_mostra_formato(self):
-        vasetto = Articolo.objects.create(
-            codice="VASO-250",
-            descrizione="Vasetto 250 g",
-            categoria=Articolo.Categoria.MOCA,
-            unita_misura=Articolo.UnitaMisura.PZ,
-            formato=Decimal("250"),
-            unita_formato=Articolo.UnitaFormato.G,
-        )
-
-        response = self.client.get(reverse("dettaglio_articolo", args=[vasetto.pk]))
-
-        self.assertContains(response, "Formato del singolo articolo")
-        self.assertContains(response, "250")
-        self.assertContains(response, "g")
 
     def test_tabella_lotti_mostra_la_giacenza_attuale(self):
         response = self.client.get(
@@ -434,6 +471,36 @@ class SituazioneMagazzinoTests(TestCase):
         self.assertEqual(len(seconda_pagina.context["movimenti"]), 1)
         self.assertContains(prima_pagina, "Pagina 1 di 2")
 
+    def test_movimenti_possono_essere_filtrati(self):
+        Movimento.objects.create(
+            tipo=Movimento.Tipo.CARICO,
+            lotto=self.lotto_prodotto,
+            quantita=Decimal("2"),
+            ubicazione_destinazione=self.ubicazione_a,
+            causale="Carico ricercabile",
+        )
+        Movimento.objects.create(
+            tipo=Movimento.Tipo.CONSUMO,
+            lotto=self.lotto_imballo,
+            quantita=Decimal("1"),
+            ubicazione_origine=self.ubicazione_b,
+            causale="Consumo da escludere",
+        )
+
+        response = self.client.get(
+            reverse("elenco_movimenti"),
+            {
+                "q": "ricercabile",
+                "tipo": Movimento.Tipo.CARICO,
+                "ubicazione": self.ubicazione_a.pk,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.context["movimenti"]), 1)
+        self.assertContains(response, "Carico ricercabile")
+        self.assertNotContains(response, "Consumo da escludere")
+
 
 class TrasferimentoGuidatoTests(TestCase):
     @classmethod
@@ -460,8 +527,6 @@ class TrasferimentoGuidatoTests(TestCase):
         cls.origine = Ubicazione.objects.create(
             nome="Origine trasferimento",
             tipo_magazzino=Ubicazione.TipoMagazzino.MP,
-            scaffale="A",
-            piano="1",
         )
         cls.destinazione = Ubicazione.objects.create(
             nome="Destinazione trasferimento",
@@ -483,6 +548,7 @@ class TrasferimentoGuidatoTests(TestCase):
             lotto=cls.lotto,
             ubicazione=cls.origine,
             quantita=Decimal("8"),
+            scaffale="A",
         )
         Giacenza.objects.create(
             lotto=cls.lotto_altro,

@@ -46,7 +46,7 @@
                         <th>Azioni</th>
                     {% else %}
                         <th>Preparazione</th>
-                        <th>RoboQubo</th>
+                        <th>RoboQbo</th>
                         <th>Invasettamento</th>
                         <th>Stato generale</th>
                         <th>Dettaglio</th>
@@ -93,7 +93,7 @@
                             <td>
                                 {% if produzione.stato == "ABORTITA" %}—{% else %}
                                 <strong>{% if not produzione.preparazione_chiusa_il %}Non avviato{% else %}{{ produzione.get_stato_roboqubo_display }}{% endif %}</strong>
-                                {% if produzione.preparazione_chiusa_il and produzione.stato_roboqubo != "CONCLUSA" and produzione.stato_roboqubo != "SOSPESA" and produzione.stato == "BOZZA" and perms.magazzino.operare_roboqubo %}<br><a class="btn btn-secondary" href="{% url 'gestione_produzione' produzione.pk %}#roboqubo">Riprendi RoboQubo</a>{% elif produzione.stato_roboqubo == "SOSPESA" %}<br><small>In attesa del RQ</small>{% endif %}
+                                {% if produzione.preparazione_chiusa_il and produzione.stato_roboqubo != "CONCLUSA" and produzione.stato_roboqubo != "SOSPESA" and produzione.stato == "BOZZA" and perms.magazzino.operare_roboqubo %}<br><a class="btn btn-secondary" href="{% url 'gestione_produzione' produzione.pk %}#roboqubo">Riprendi RoboQbo</a>{% elif produzione.stato_roboqubo == "SOSPESA" %}<br><small>In attesa del RQ</small>{% endif %}
                                 {% endif %}
                             </td>
                             <td>

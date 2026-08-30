@@ -46,8 +46,6 @@ class UbicazioneAdmin(admin.ModelAdmin):
     list_display = (
         "nome",
         "tipo_magazzino",
-        "scaffale",
-        "piano",
         "attiva",
     )
     list_filter = (
@@ -56,8 +54,6 @@ class UbicazioneAdmin(admin.ModelAdmin):
     )
     search_fields = (
         "nome",
-        "scaffale",
-        "piano",
     )
     ordering = ("nome",)
 

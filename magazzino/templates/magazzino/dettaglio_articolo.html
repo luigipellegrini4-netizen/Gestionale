@@ -75,22 +75,6 @@
             {% if articolo.tracciabilita_lotto %}Sì{% else %}No{% endif %}
         </div>
 
-        {% if articolo.quantita_per_confezione %}
-
-            <div>
-                <strong>Unità per confezione di acquisto</strong>
-                {{ articolo.quantita_per_confezione }}
-            </div>
-
-        {% endif %}
-
-        {% if articolo.formato %}
-            <div>
-                <strong>Formato del singolo articolo</strong>
-                {{ articolo.formato }} {{ articolo.get_unita_formato_display }}
-            </div>
-        {% endif %}
-
         <div>
             <strong>Scorta minima</strong>
             {{ articolo.scorta_minima }}
@@ -112,15 +96,6 @@
             <div>
                 <strong>Tipo packaging</strong>
                 {{ articolo.get_tipo_packaging_display }}
-            </div>
-
-        {% endif %}
-
-        {% if articolo.pezzi_per_imballo %}
-
-            <div>
-                <strong>Confezioni per imballo</strong>
-                {{ articolo.pezzi_per_imballo }}
             </div>
 
         {% endif %}

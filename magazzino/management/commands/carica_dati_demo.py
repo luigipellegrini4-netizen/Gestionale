@@ -60,8 +60,6 @@ class Command(BaseCommand):
                 nome=nome,
                 defaults={
                     "tipo_magazzino": tipo,
-                    "scaffale": "",
-                    "piano": "",
                     "attiva": True,
                 },
             )
@@ -83,19 +81,11 @@ class Command(BaseCommand):
                 "nome_produzione": descrizione,
                 "categoria": categoria,
                 "unita_misura": unita,
-                "quantita_per_confezione": (
-                    Decimal(confezione) if confezione is not None else None
-                ),
                 "scorta_minima": Decimal("0"),
                 "tipo_packaging": packaging,
                 "attivo": True,
                 "note": "Dato dimostrativo",
             }
-            if codice == "MOCA-VASO-250":
-                valori["formato"] = Decimal("250")
-                valori["unita_formato"] = "G"
-            if packaging == "SCATOLA":
-                valori["pezzi_per_imballo"] = 12
             articolo, _ = Articolo.objects.update_or_create(
                 codice=codice,
                 defaults=valori,
@@ -162,6 +152,7 @@ class Command(BaseCommand):
                 numero_colli=1,
                 unita_acquisto_per_collo=1,
                 peso_unita_acquisto=Decimal(quantita),
+                capacita_imballo=(12 if articolo_codice == "SCA-12X250" else None),
                 ddt=f"DDT-DEMO-{lotto_codice}",
                 scaffale=scaffale,
                 piano=piano,

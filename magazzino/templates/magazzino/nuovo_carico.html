@@ -45,9 +45,29 @@ Nuovo carico - MIRA
 {{ articoli_non_tracciati|json_script:"articoli-non-tracciati" }}
 <script>
 document.addEventListener("DOMContentLoaded", function () {
+    const ricerca = document.getElementById("id_ricerca_articolo");
     const articolo = document.getElementById("id_articolo");
     const lotto = document.getElementById("id_codice_lotto");
     const nonTracciati = new Set(JSON.parse(document.getElementById("articoli-non-tracciati").textContent).map(String));
+    const opzioniArticolo = Array.from(articolo.options).map(option => ({
+        value: option.value,
+        text: option.textContent,
+        selected: option.selected,
+    }));
+
+    function filtraArticoli() {
+        const termine = ricerca.value.trim().toLocaleLowerCase("it");
+        const valore = articolo.value;
+        articolo.replaceChildren();
+        for (const dato of opzioniArticolo) {
+            if (dato.value && termine && !dato.text.toLocaleLowerCase("it").includes(termine)) continue;
+            const option = new Option(dato.text, dato.value);
+            option.selected = dato.value === valore || (!valore && dato.selected);
+            articolo.add(option);
+        }
+        if (valore && articolo.value !== valore) articolo.value = "";
+        aggiornaLotto();
+    }
     function aggiornaLotto() {
         const nascosto = nonTracciati.has(articolo.value);
         lotto.required = !nascosto;
@@ -55,6 +75,7 @@ document.addEventListener("DOMContentLoaded", function () {
         if (nascosto) lotto.value = "";
     }
     articolo.addEventListener("change", aggiornaLotto);
+    ricerca.addEventListener("input", filtraArticoli);
     aggiornaLotto();
 });
 </script>

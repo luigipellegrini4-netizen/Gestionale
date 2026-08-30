@@ -116,47 +116,16 @@ class ArticoloFormTests(TestCase):
             "nome_produzione": "",
             "categoria": Articolo.Categoria.MATERIA_PRIMA,
             "unita_misura": Articolo.UnitaMisura.KG,
-            "quantita_per_confezione": "1.250",
-            "formato": "",
-            "unita_formato": "",
             "scorta_minima": "0",
             "tipo_packaging": "",
-            "pezzi_per_imballo": "",
             "attivo": "on",
             "note": "",
         }
 
-    def test_accetta_quantita_per_confezione_positiva(self):
+    def test_accetta_articolo_valido(self):
         form = ArticoloForm(data=self.dati_validi())
 
         self.assertTrue(form.is_valid(), form.errors)
-
-    def test_rifiuta_quantita_per_confezione_non_positiva(self):
-        dati = self.dati_validi()
-        dati["quantita_per_confezione"] = "0"
-        form = ArticoloForm(data=dati)
-
-        self.assertFalse(form.is_valid())
-        self.assertIn("quantita_per_confezione", form.errors)
-
-    def test_formato_richiede_anche_unita(self):
-        dati = self.dati_validi()
-        dati["formato"] = "250"
-        form = ArticoloForm(data=dati)
-
-        self.assertFalse(form.is_valid())
-        self.assertIn("__all__", form.errors)
-
-    def test_accetta_formato_del_vasetto(self):
-        dati = self.dati_validi()
-        dati["categoria"] = Articolo.Categoria.MOCA
-        dati["unita_misura"] = Articolo.UnitaMisura.PZ
-        dati["formato"] = "250"
-        dati["unita_formato"] = Articolo.UnitaFormato.G
-        form = ArticoloForm(data=dati)
-
-        self.assertTrue(form.is_valid(), form.errors)
-
 
 class RicettaFormTests(TestCase):
     @classmethod

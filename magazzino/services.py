@@ -46,7 +46,7 @@ def concludi_invasettamento_senza_nuovo_lotto(produzione):
     if produzione.stato != Produzione.Stato.BOZZA:
         raise ValueError("La produzione è già stata conclusa.")
     if produzione.stato_roboqubo != Produzione.StatoRoboqubo.CONCLUSA:
-        raise ValueError("RoboQubo deve essere concluso prima dell’invasettamento.")
+        raise ValueError("RoboQbo deve essere concluso prima dell’invasettamento.")
     if produzione.tank.filter(
         annullato=False, data_ora_controlli__isnull=False,
         stato_invasettamento=TankProduzione.StatoInvasettamento.DISPONIBILE,
@@ -170,7 +170,7 @@ def conferma_lotto_parziale_produzione(
         lotto=lotto,
         quantita=quantita_prodotta,
         ubicazione_destinazione=ubicazione,
-        causale="Produzione parziale chiusa durante NC RoboQubo",
+        causale="Produzione parziale chiusa durante NC RoboQbo",
         note=note,
         eseguito_da=operatore,
     )
@@ -179,7 +179,7 @@ def conferma_lotto_parziale_produzione(
         lotto=lotto,
         non_conformita=produzione.non_conformita.exclude(stato=NonConformitaLotto.Stato.CHIUSA).first(),
         provvisorio=False,
-        motivo_separazione="Chiusura definitiva dell'invasettato disponibile durante NC RoboQubo",
+        motivo_separazione="Chiusura definitiva dell'invasettato disponibile durante NC RoboQbo",
         numero_vasetti_buoni=quantita_prodotta,
         numero_vasetti_scartati=scarti,
         numero_capsule_difettose=int(capsule_difettose_finali),
@@ -227,7 +227,7 @@ def apri_non_conformita_batch(batch, produzione_puo_proseguire, motivo, operator
         note_apertura=(
             "Batch messo in quarantena; produzione autorizzata a proseguire dall'operatore."
             if puo_proseguire else
-            "Batch messo in quarantena; fase RoboQubo sospesa dall'operatore."
+            "Batch messo in quarantena; fase RoboQbo sospesa dall'operatore."
         ),
         aperta_da=operatore,
     )
@@ -435,7 +435,7 @@ def risolvi_non_conformita_batch(non_conformita, esito_batch, decisioni_material
         pk=non_conformita.pk,
     )
     if not nc.batch_id or not nc.produzione_id:
-        raise ValueError("La non conformità non riguarda un batch RoboQubo.")
+        raise ValueError("La non conformità non riguarda un batch RoboQbo.")
     if esito_batch not in {"SCARTA", "REINTEGRA"}:
         raise ValueError("Indicare se il batch deve essere scartato o reintegrato.")
 
@@ -781,6 +781,7 @@ def registra_carico_lotto(
     numero_colli=None,
     unita_acquisto_per_collo=None,
     peso_unita_acquisto=None,
+    capacita_imballo=None,
     fattura="",
     ddt="",
     scaffale="",
@@ -815,6 +816,10 @@ def registra_carico_lotto(
             raise ValueError(
                 "Il peso della singola unità di acquisto deve essere maggiore di zero."
             )
+    if capacita_imballo is not None:
+        capacita_imballo = int(capacita_imballo)
+        if capacita_imballo <= 0:
+            raise ValueError("La capacità dell'imballo deve essere maggiore di zero.")
 
     valori_presenti = sum(
         valore is not None
@@ -867,6 +872,16 @@ def registra_carico_lotto(
             )
     if not articolo.attivo:
         raise ValueError("L'articolo non è attivo.")
+    if (
+        articolo.tipo_packaging in {
+            Articolo.TipoPackaging.SCATOLA,
+            Articolo.TipoPackaging.COFANETTO,
+        }
+        and capacita_imballo is None
+    ):
+        raise ValueError(
+            "Indicare la capacità della singola scatola o del cofanetto."
+        )
     if articolo.tracciabilita_lotto and not codice_lotto:
         raise ValueError("Il codice lotto è obbligatorio per questo articolo.")
     if not articolo.tracciabilita_lotto and not codice_lotto:
@@ -904,6 +919,7 @@ def registra_carico_lotto(
         numero_colli=numero_colli,
         unita_acquisto_per_collo=unita_acquisto_per_collo,
         peso_unita_acquisto=peso_unita_acquisto,
+        capacita_imballo=capacita_imballo,
         note=note,
     )
     movimento = registra_carico(
@@ -1049,27 +1065,84 @@ def registra_consumo(
 
 
 @transaction.atomic
+def registra_rettifica_inventario(
+    giacenza, quantita_reale, motivo, note="", operatore=None,
+):
+    giacenza = Giacenza.objects.select_for_update().select_related(
+        "lotto", "ubicazione",
+    ).get(pk=giacenza.pk)
+    quantita_reale = Decimal(str(quantita_reale))
+    if quantita_reale < 0:
+        raise ValueError("La quantità reale non può essere negativa.")
+    motivo = (motivo or "").strip()
+    if not motivo:
+        raise ValueError("Il motivo della rettifica è obbligatorio.")
+    quantita_teorica = giacenza.quantita
+    differenza = quantita_reale - quantita_teorica
+    if differenza == 0:
+        raise ValueError(
+            "La quantità reale coincide con quella teorica: non è necessaria una rettifica."
+        )
+
+    giacenza.quantita = quantita_reale
+    giacenza.save(update_fields=["quantita"])
+    movimento = Movimento.objects.create(
+        tipo=Movimento.Tipo.RETTIFICA,
+        lotto=giacenza.lotto,
+        quantita=abs(differenza),
+        ubicazione_origine=giacenza.ubicazione if differenza < 0 else None,
+        ubicazione_destinazione=giacenza.ubicazione if differenza > 0 else None,
+        scaffale_origine=giacenza.scaffale if differenza < 0 else "",
+        piano_origine=giacenza.piano if differenza < 0 else "",
+        scaffale_destinazione=giacenza.scaffale if differenza > 0 else "",
+        piano_destinazione=giacenza.piano if differenza > 0 else "",
+        causale=motivo,
+        note=(
+            f"Inventario: teorico {quantita_teorica}; reale {quantita_reale}; "
+            f"differenza {differenza:+}. {note}"
+        ).strip(),
+        eseguito_da=operatore,
+    )
+    movimento.quantita_teorica = quantita_teorica
+    movimento.quantita_reale = quantita_reale
+    movimento.differenza = differenza
+    return movimento
+
+
+@transaction.atomic
 def apri_non_conformita_lotto(
     lotto,
     giacenza,
-    numero_uda,
-    motivo,
+    numero_uda=None,
+    quantita=None,
+    unita_quarantena="UDA",
+    motivo="",
     note="",
     operatore=None,
     ambito=NonConformitaLotto.Ambito.PRODUZIONE,
     tipo_nc=NonConformitaLotto.Tipo.INTERNO,
 ):
-    numero_uda = int(numero_uda)
-    if numero_uda <= 0:
-        raise ValueError("Il numero di UDA deve essere maggiore di zero.")
+    unita_quarantena = unita_quarantena or "UDA"
     if operatore is None:
         raise ValueError("L'operatore che apre la non conformità è obbligatorio.")
     if not (motivo or "").strip():
         raise ValueError("Il motivo della non conformità è obbligatorio.")
-    if lotto.quantita_singola_uda is None or lotto.quantita_singola_uda <= 0:
-        raise ValueError(
-            "Il lotto non ha la quantità della singola UDA registrata."
-        )
+    if unita_quarantena == "UDA":
+        numero_uda = int(numero_uda if numero_uda is not None else quantita)
+        if numero_uda <= 0:
+            raise ValueError("Il numero di UDA deve essere maggiore di zero.")
+        if lotto.quantita_singola_uda is None or lotto.quantita_singola_uda <= 0:
+            raise ValueError("Il lotto non ha la quantità della singola UDA registrata.")
+        quantita_per_uda = Decimal(lotto.quantita_singola_uda)
+        quantita_quarantena = Decimal(numero_uda) * quantita_per_uda
+    elif unita_quarantena == "KG":
+        quantita_quarantena = Decimal(str(quantita))
+        if quantita_quarantena <= 0:
+            raise ValueError("I kg in quarantena devono essere maggiori di zero.")
+        numero_uda = None
+        quantita_per_uda = None
+    else:
+        raise ValueError("Unità della quarantena non valida.")
 
     giacenza = (
         Giacenza.objects.select_for_update()
@@ -1080,8 +1153,6 @@ def apri_non_conformita_lotto(
     if giacenza is None:
         raise ValueError("La posizione selezionata non appartiene al lotto.")
 
-    quantita_per_uda = Decimal(lotto.quantita_singola_uda)
-    quantita_quarantena = Decimal(numero_uda) * quantita_per_uda
     if giacenza.quantita < quantita_quarantena:
         raise ValueError(
             "Le UDA richieste superano la giacenza disponibile nella posizione."
@@ -1097,6 +1168,7 @@ def apri_non_conformita_lotto(
         numero_uda_quarantena=numero_uda,
         quantita_quarantena=quantita_quarantena,
         quantita_per_uda=quantita_per_uda,
+        unita_quarantena=unita_quarantena,
         motivo=motivo.strip(),
         note_apertura=(note or "").strip(),
         aperta_da=operatore,
@@ -1120,10 +1192,12 @@ def apri_non_conformita_lotto(
 @transaction.atomic
 def gestisci_non_conformita_lotto(
     non_conformita,
-    numero_uda_scartate,
-    numero_uda_reintegrate,
-    decisione,
+    numero_uda_scartate=None,
+    numero_uda_reintegrate=None,
+    decisione="",
     responsabile=None,
+    quantita_scartata=None,
+    quantita_reintegrata=None,
 ):
     non_conformita = (
         NonConformitaLotto.objects.select_for_update()
@@ -1137,19 +1211,29 @@ def gestisci_non_conformita_lotto(
     if not (decisione or "").strip():
         raise ValueError("La motivazione della decisione è obbligatoria.")
 
-    scartate = int(numero_uda_scartate)
-    reintegrate = int(numero_uda_reintegrate)
+    unita = non_conformita.unita_quarantena or "UDA"
+    scartate = Decimal(str(
+        quantita_scartata if quantita_scartata is not None else numero_uda_scartate
+    ))
+    reintegrate = Decimal(str(
+        quantita_reintegrata if quantita_reintegrata is not None else numero_uda_reintegrate
+    ))
     if scartate < 0 or reintegrate < 0:
         raise ValueError("Le quantità di UDA non possono essere negative.")
-    if scartate + reintegrate != non_conformita.numero_uda_quarantena:
+    totale_input = (
+        Decimal(non_conformita.numero_uda_quarantena)
+        if unita == "UDA" else non_conformita.quantita_quarantena
+    )
+    if scartate + reintegrate != totale_input:
         raise ValueError(
-            "La somma delle UDA scartate e reintegrate deve coincidere con "
-            "le UDA in quarantena."
+            "La somma delle quantità scartata e reintegrata deve coincidere "
+            "con la quantità in quarantena."
         )
 
     lotto = non_conformita.lotto
-    quantita_reintegrata = Decimal(reintegrate) * non_conformita.quantita_per_uda
-    quantita_scartata = Decimal(scartate) * non_conformita.quantita_per_uda
+    fattore = non_conformita.quantita_per_uda if unita == "UDA" else Decimal("1")
+    quantita_reintegrata_magazzino = reintegrate * fattore
+    quantita_scartata_magazzino = scartate * fattore
 
     if reintegrate:
         giacenza = (
@@ -1170,12 +1254,12 @@ def gestisci_non_conformita_lotto(
                 piano=non_conformita.piano_origine,
                 quantita=Decimal("0"),
             )
-        giacenza.quantita += quantita_reintegrata
+        giacenza.quantita += quantita_reintegrata_magazzino
         giacenza.save(update_fields=["quantita"])
         Movimento.objects.create(
             tipo=Movimento.Tipo.REINTEGRO,
             lotto=lotto,
-            quantita=quantita_reintegrata,
+            quantita=quantita_reintegrata_magazzino,
             ubicazione_destinazione=non_conformita.ubicazione_origine,
             scaffale_destinazione=non_conformita.scaffale_origine,
             piano_destinazione=non_conformita.piano_origine,
@@ -1188,15 +1272,17 @@ def gestisci_non_conformita_lotto(
         Movimento.objects.create(
             tipo=Movimento.Tipo.SCARTO_NC,
             lotto=lotto,
-            quantita=quantita_scartata,
+            quantita=quantita_scartata_magazzino,
             causale=f"Scarto non conformità NC-{non_conformita.pk}",
             note=decisione.strip(),
             eseguito_da=responsabile,
         )
 
     non_conformita.stato = NonConformitaLotto.Stato.CHIUSA
-    non_conformita.numero_uda_scartate = scartate
-    non_conformita.numero_uda_reintegrate = reintegrate
+    non_conformita.numero_uda_scartate = int(scartate) if unita == "UDA" else None
+    non_conformita.numero_uda_reintegrate = int(reintegrate) if unita == "UDA" else None
+    non_conformita.quantita_scartata = scartate
+    non_conformita.quantita_reintegrata = reintegrate
     non_conformita.decisione = decisione.strip()
     non_conformita.gestita_da = responsabile
     non_conformita.data_chiusura = timezone.now()
@@ -1205,6 +1291,8 @@ def gestisci_non_conformita_lotto(
             "stato",
             "numero_uda_scartate",
             "numero_uda_reintegrate",
+            "quantita_scartata",
+            "quantita_reintegrata",
             "decisione",
             "gestita_da",
             "data_chiusura",
@@ -1448,6 +1536,7 @@ def registra_prelievi_produzione(
     note="",
     operatore=None,
     tank=None,
+    giacenze_ids=None,
 ):
     if not isinstance(produzione, Produzione):
         raise ValueError("La produzione non è valida.")
@@ -1492,6 +1581,7 @@ def registra_prelievi_produzione(
         articolo,
         quantita_richiesta,
         rispetta_uda=True,
+        giacenze_ids=giacenze_ids,
     )
 
     if not risultato["completa"]:
@@ -1653,7 +1743,10 @@ def registra_ingredienti_tank(
 
 
 @transaction.atomic
-def chiudi_preparazione_produzione(produzione, quantita_per_articolo, note_per_articolo=None, operatore=None):
+def chiudi_preparazione_produzione(
+    produzione, quantita_per_articolo, note_per_articolo=None, operatore=None,
+    giacenze_per_articolo=None,
+):
     note_per_articolo = note_per_articolo or {}
     produzione = Produzione.objects.select_for_update().get(pk=produzione.pk)
     if produzione.fase != Produzione.Fase.PREPARAZIONE:
@@ -1669,6 +1762,10 @@ def chiudi_preparazione_produzione(produzione, quantita_per_articolo, note_per_a
         creati_riga = registra_prelievi_produzione(
             produzione, riga.articolo, quantita_per_articolo[riga.articolo_id],
             note_per_articolo.get(riga.articolo_id, ""), operatore,
+            giacenze_ids=(
+                giacenze_per_articolo.get(riga.articolo_id)
+                if giacenze_per_articolo is not None else None
+            ),
         )
         for prelievo in creati_riga:
             prelievo.quantita_scarto = Decimal("0")
@@ -1723,6 +1820,10 @@ def elimina_produzione_bozza(produzione, operatore=None):
     produzione = Produzione.objects.select_for_update().get(pk=produzione.pk)
     if produzione.stato != Produzione.Stato.BOZZA:
         raise ValueError("È possibile eliminare solo una produzione in bozza.")
+    if produzione.batch.exists():
+        raise ValueError(
+            "Non è possibile annullare la produzione perché almeno un batch è già stato lavorato."
+        )
 
     prelievi = list(
         produzione.prelievi.select_related(
@@ -1766,6 +1867,8 @@ def elimina_produzione_bozza(produzione, operatore=None):
             lotto=prelievo.lotto,
             quantita=quantita_movimentata,
             ubicazione_destinazione=prelievo.ubicazione_origine,
+            scaffale_destinazione=prelievo.scaffale_origine,
+            piano_destinazione=prelievo.piano_origine,
             causale="Annullamento produzione in bozza",
             note=f"Produzione annullata n. {produzione.pk}",
             eseguito_da=operatore,
@@ -1866,7 +1969,7 @@ def conferma_produzione(
 
     if produzione.stato_roboqubo != Produzione.StatoRoboqubo.CONCLUSA:
         raise ValueError(
-            "La produzione non può essere chiusa finché RoboQubo non è concluso."
+            "La produzione non può essere chiusa finché RoboQbo non è concluso."
         )
 
     tank_correnti = produzione.tank.filter(
@@ -2470,12 +2573,12 @@ def registra_inscatolamento(
             "Il materiale selezionato non è una scatola o un cofanetto."
         )
 
-    pezzi_per_imballo = lotto_imballo.articolo.pezzi_per_imballo
+    pezzi_per_imballo = lotto_imballo.capacita_imballo
 
     if pezzi_per_imballo is None or pezzi_per_imballo <= 0:
         raise ValueError(
-            "Il materiale di imballo non ha un numero valido "
-            "di pezzi per imballo."
+            "Il lotto del materiale di imballo non indica la capacità "
+            "della singola scatola o del cofanetto."
         )
 
     pezzi_per_imballo = Decimal(str(pezzi_per_imballo))
@@ -2589,6 +2692,7 @@ def proponi_prelievi_articolo(
     articolo,
     quantita_richiesta,
     rispetta_uda=False,
+    giacenze_ids=None,
 ):
     quantita_richiesta = Decimal(str(quantita_richiesta))
 
@@ -2602,7 +2706,7 @@ def proponi_prelievi_articolo(
             "L'articolo non è attivo."
         )
 
-    giacenze = list(
+    giacenze_queryset = (
         Giacenza.objects
         .select_related(
             "lotto",
@@ -2614,6 +2718,14 @@ def proponi_prelievi_articolo(
             ubicazione__attiva=True,
         )
     )
+    if giacenze_ids is not None:
+        ids = {int(pk) for pk in giacenze_ids}
+        if not ids:
+            raise ValueError(
+                f"Seleziona almeno un lotto o un'ubicazione per {articolo.codice}."
+            )
+        giacenze_queryset = giacenze_queryset.filter(pk__in=ids)
+    giacenze = list(giacenze_queryset)
 
     giacenze.sort(
         key=lambda g: (

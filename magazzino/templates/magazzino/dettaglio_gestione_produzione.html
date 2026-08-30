@@ -6,10 +6,10 @@
 <div class="card"><h3>1. Preparazione</h3><div class="detail-grid"><div><strong>Data inizio</strong><br>{{ produzione.data_produzione|date:"d/m/Y" }}</div><div><strong>Lotto temporaneo</strong><br>{{ produzione.lotto_provvisorio }}</div><div><strong>Batch previsti</strong><br>{{ produzione.numero_batch_previsti }}</div><div><strong>Chiusura</strong><br>{{ produzione.preparazione_chiusa_il|date:"d/m/Y H:i"|default:"Aperta" }}</div></div><p><a class="btn btn-secondary" href="{% url 'modifica_produzione' produzione.pk %}">Modifica preparazione</a></p>{% if prelievi %}<table><thead><tr><th>Articolo</th><th>Lotto</th><th>Quantità prelevata</th><th>Scarto</th><th>Note</th></tr></thead><tbody>{% for p in prelievi %}<tr><td>{{ p.lotto.articolo }}</td><td>{{ p.lotto.codice_visualizzato }}</td><td>{{ p.quantita_prelevata }}</td><td>{{ p.quantita_scarto|default:"—" }}</td><td>{{ p.note|default:"—" }}</td></tr>{% endfor %}</tbody></table>{% endif %}</div>
 
 <div class="card">
-    <h3>2. RoboQubo</h3>
+    <h3>2. RoboQbo</h3>
     <div class="detail-grid">
-        <div><strong>Stato RoboQubo</strong><br>{{ produzione.get_stato_roboqubo_display }}</div>
-        <div><strong>Chiusura RoboQubo</strong><br>{{ produzione.roboqubo_chiuso_il|date:"d/m/Y H:i"|default:"—" }}</div>
+        <div><strong>Stato RoboQbo</strong><br>{{ produzione.get_stato_roboqubo_display }}</div>
+        <div><strong>Chiusura RoboQbo</strong><br>{{ produzione.roboqubo_chiuso_il|date:"d/m/Y H:i"|default:"—" }}</div>
     </div>
     <h4>Batch</h4>
     {% if batch_registrati %}<div class="table-container"><table><thead><tr><th>N.</th><th>Orario</th><th>Tracciato</th><th>Esito registrato</th><th>Stato</th><th>Tank</th><th>Note</th><th></th></tr></thead><tbody>{% for b in batch_registrati %}<tr><td>{{ b.numero }}</td><td>{% if b.ora_inizio and b.ora_fine %}{{ b.ora_inizio|time:"H:i" }}–{{ b.ora_fine|time:"H:i" }}{% else %}—{% endif %}</td><td>{{ b.temperatura_conformita }} °C × {{ b.durata_conformita_secondi }} sec</td><td>{{ b.get_esito_conformita_display|default:"—" }}</td><td><strong>{{ b.get_stato_display }}</strong></td><td>{% if b.tank %}Tank {{ b.tank.numero }}{% else %}—{% endif %}</td><td>{{ b.note|default:"—" }}</td><td><a class="btn btn-secondary" href="{% url 'modifica_batch_produzione' b.pk %}">Modifica</a></td></tr>{% endfor %}</tbody></table></div>{% else %}<p>Nessun batch registrato.</p>{% endif %}

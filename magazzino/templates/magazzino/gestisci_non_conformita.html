@@ -3,6 +3,20 @@
 {% block title %}Gestisci NC-{{ non_conformita.pk }} - MIRA{% endblock %}
 
 {% block content %}
+<style>
+    .nc-manage-section { border: 1px solid #d9e0e7; border-radius: 10px; padding: 1.2rem; margin-bottom: 1rem; background: #fff; }
+    .nc-manage-section h3 { margin: 0 0 .25rem; }
+    .nc-manage-intro { color: #667085; margin: 0 0 1rem; }
+    .nc-manage-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+    .nc-manage-field-wide { grid-column: 1 / -1; }
+    .nc-manage-field label { display: block; font-weight: 650; margin-bottom: .35rem; }
+    .nc-manage-field input:not([type="checkbox"]), .nc-manage-field select, .nc-manage-field textarea { width: 100%; box-sizing: border-box; }
+    .nc-manage-section table select, .nc-manage-section table input { width:100%; min-width:130px; box-sizing:border-box; }
+    .nc-manage-section table td { vertical-align:top; }
+    .nc-required { color: #b42318; font-weight: 800; }
+    .nc-conditional { color: #667085; font-size: .85rem; font-weight: 400; }
+    @media (max-width: 720px) { .nc-manage-grid { grid-template-columns: 1fr; } .nc-manage-field-wide { grid-column: auto; } }
+</style>
 <div class="page-header">
     <div>
         <h2>Gestisci non conformità NC-{{ non_conformita.pk }}</h2>
@@ -19,16 +33,16 @@
         <div><strong>Stato</strong>{{ non_conformita.get_stato_display }}</div>
         <div><strong>Aperta da</strong>{{ non_conformita.aperta_da.get_username }}</div>
         <div><strong>Data apertura</strong>{{ non_conformita.data_apertura|date:"d/m/Y H:i" }}</div>
-        {% if non_conformita.numero_uda_quarantena %}
-        <div><strong>UDA in quarantena</strong>{{ non_conformita.numero_uda_quarantena }}</div>
-        <div><strong>Quantità per UDA</strong>{{ non_conformita.quantita_per_uda }} {{ non_conformita.lotto.articolo.unita_misura }}</div>
+        {% if non_conformita.ubicazione_origine %}<div><strong>Posizione coinvolta</strong>{{ non_conformita.ubicazione_origine.nome }}{% if non_conformita.scaffale_origine %} · Scaffale {{ non_conformita.scaffale_origine }}{% endif %}{% if non_conformita.piano_origine %} · Piano {{ non_conformita.piano_origine }}{% endif %}</div>{% endif %}
+        {% if non_conformita.quantita_quarantena %}
+        <div><strong>Quantità dichiarata</strong>{% if non_conformita.unita_quarantena == "UDA" or not non_conformita.unita_quarantena %}{{ non_conformita.numero_uda_quarantena }} UDA{% else %}{{ non_conformita.quantita_quarantena }} kg{% endif %}</div>
+        {% if non_conformita.quantita_per_uda %}<div><strong>Quantità per UDA</strong>{{ non_conformita.quantita_per_uda }} {{ non_conformita.lotto.articolo.unita_misura }}</div>{% endif %}
         <div><strong>Quantità totale</strong>{{ non_conformita.quantita_quarantena }} {{ non_conformita.lotto.articolo.unita_misura }}</div>
-        <div><strong>Posizione originaria</strong>{{ non_conformita.ubicazione_origine.nome }}</div>
         {% endif %}
         {% if non_conformita.batch %}
         <div><strong>Produzione</strong>{{ non_conformita.produzione.articolo.codice }} — {{ non_conformita.lotto_temporaneo }}</div>
         <div><strong>Batch</strong>{{ non_conformita.batch.numero }} — {{ non_conformita.batch.get_stato_display }}</div>
-        <div><strong>Decisione operatore</strong>{% if non_conformita.produzione_puo_proseguire %}Proseguire{% else %}Sospendere RoboQubo{% endif %}</div>
+        <div><strong>Decisione operatore</strong>{% if non_conformita.produzione_puo_proseguire %}Proseguire{% else %}Sospendere RoboQbo{% endif %}</div>
         {% endif %}
     </div>
     <p><strong>Motivo</strong><br>{{ non_conformita.motivo }}</p>
@@ -44,17 +58,23 @@
         {% csrf_token %}
         {% if non_conformita.batch %}
             {% if non_conformita.produzioni_bloccate.exists %}<div class="message warning"><strong>Produzione derivata bloccata.</strong> Decidi il destino del batch in quarantena e dei materiali residui per stabilire se la produzione può riprendere.</div>{% endif %}
-            <div class="card">
-                <h3>Decisione sul batch</h3>
-                <p>{{ form.campo_esito_batch.label_tag }} {{ form.campo_esito_batch }} {{ form.campo_esito_batch.errors }}</p>
-            </div>
+            <section class="nc-manage-section">
+                <h3>1. Decisione sul batch in quarantena</h3>
+                <p class="nc-manage-intro">Decidi se il batch non conforme deve essere scartato oppure reintegrato nella lavorazione.</p>
+                <div class="nc-manage-grid">
+                    <div class="nc-manage-field nc-manage-field-wide">
+                        <label for="{{ form.campo_esito_batch.id_for_label }}">{{ form.campo_esito_batch.label }} <span class="nc-required">*</span></label>
+                        {{ form.campo_esito_batch }}{{ form.campo_esito_batch.errors }}
+                    </div>
+                </div>
+            </section>
             {% if form.righe_materiali %}
-            <div class="card">
-                <h3>Decisione sui materiali preparati</h3>
-                <p>Per ogni ingrediente scegli <strong>Reintegro</strong> oppure <strong>Scarto</strong>.</p>
+            <section class="nc-manage-section">
+                <h3>2. Decisione sui materiali preparati</h3>
+                <p class="nc-manage-intro">Per ogni ingrediente scegli <strong>Reintegro</strong> oppure <strong>Scarto</strong>. Le decisioni contrassegnate con <strong>*</strong> sono necessarie per chiudere la NC.</p>
                 <p><button type="button" id="reintegra-tutti-materiali" class="btn btn-secondary">Reintegra tutti i materiali</button></p>
                 <div class="table-container"><table>
-                    <thead><tr><th>Ingrediente</th><th>Decisione</th>{% if form.mostra_scadenza_materiali %}<th>Nuova scadenza</th>{% endif %}<th>Note</th></tr></thead>
+                    <thead><tr><th>Ingrediente</th><th>Decisione <span class="nc-required">*</span></th>{% if form.mostra_scadenza_materiali %}<th>Nuova scadenza</th>{% endif %}<th>Note</th></tr></thead>
                     <tbody>{% for riga in form.righe_materiali %}<tr>
                         <td><strong>{{ riga.ingrediente }}</strong><br><small>{{ riga.quantita }} {{ riga.unita_misura }}</small></td>
                         <td>{{ riga.decisione }}{{ riga.decisione.errors }}</td>
@@ -62,13 +82,75 @@
                         <td>{{ riga.note }}{{ riga.note.errors }}</td>
                     </tr>{% endfor %}</tbody>
                 </table></div>
-            </div>
+            </section>
             {% endif %}
-            <div class="card"><h3>Analisi, azione correttiva e chiusura</h3>
-            {% for campo in form.campi_generali %}<p>{{ campo.label_tag }} {{ campo }} {{ campo.errors }}{% if campo.help_text %}<br><small>{{ campo.help_text }}</small>{% endif %}</p>{% endfor %}
-            </div>
+            <section class="nc-manage-section">
+                <h3>{% if form.righe_materiali %}3{% else %}2{% endif %}. Analisi e azione correttiva</h3>
+                <p class="nc-manage-intro">Puoi salvare una lavorazione incompleta; gli asterischi indicano i dati richiesti per chiudere la NC.</p>
+                <div class="nc-manage-grid">
+                    <div class="nc-manage-field nc-manage-field-wide"><label for="{{ form.analisi_cause.id_for_label }}">{{ form.analisi_cause.label }} <span class="nc-required">*</span></label>{{ form.analisi_cause }}{{ form.analisi_cause.errors }}</div>
+                    <div class="nc-manage-field nc-manage-field-wide"><label for="{{ form.azione_risoluzione.id_for_label }}">{{ form.azione_risoluzione.label }} <span class="nc-required">*</span></label>{{ form.azione_risoluzione }}{{ form.azione_risoluzione.errors }}</div>
+                    <div class="nc-manage-field"><label for="{{ form.responsabile_azione.id_for_label }}">{{ form.responsabile_azione.label }} <span class="nc-required">*</span></label>{{ form.responsabile_azione }}{{ form.responsabile_azione.errors }}</div>
+                    <div class="nc-manage-field"><label for="{{ form.data_inizio_gestione.id_for_label }}">{{ form.data_inizio_gestione.label }} <span class="nc-required">*</span></label>{{ form.data_inizio_gestione }}{{ form.data_inizio_gestione.errors }}</div>
+                    <div class="nc-manage-field"><label for="{{ form.azione_immediata.id_for_label }}">{{ form.azione_immediata }} {{ form.azione_immediata.label }}</label>{{ form.azione_immediata.errors }}</div>
+                    <div class="nc-manage-field"><label for="{{ form.scadenza_prevista.id_for_label }}">{{ form.scadenza_prevista.label }} <span class="nc-conditional">— obbligatoria se l’azione non è immediata</span></label>{{ form.scadenza_prevista }}{{ form.scadenza_prevista.errors }}</div>
+                    <div class="nc-manage-field nc-manage-field-wide"><label for="{{ form.decisione.id_for_label }}">Note sulla decisione <span class="nc-conditional">— facoltative</span></label>{{ form.decisione }}{{ form.decisione.errors }}</div>
+                </div>
+            </section>
+            <section class="nc-manage-section">
+                <h3>{% if form.righe_materiali %}4{% else %}3{% endif %}. Verifica e chiusura</h3>
+                <div class="nc-manage-grid">
+                    <div class="nc-manage-field"><label for="{{ form.esito_efficacia.id_for_label }}">{{ form.esito_efficacia.label }} <span class="nc-required">*</span></label>{{ form.esito_efficacia }}{{ form.esito_efficacia.errors }}</div>
+                    <div class="nc-manage-field"><label for="{{ form.data_verifica.id_for_label }}">{{ form.data_verifica.label }} <span class="nc-required">*</span></label>{{ form.data_verifica }}{{ form.data_verifica.errors }}</div>
+                    <div class="nc-manage-field nc-manage-field-wide"><label for="{{ form.verifica_efficacia.id_for_label }}">{{ form.verifica_efficacia.label }} <span class="nc-required">*</span></label>{{ form.verifica_efficacia }}{{ form.verifica_efficacia.errors }}</div>
+                </div>
+            </section>
         {% else %}
-            {{ form.as_p }}
+            {% if non_conformita.quantita_quarantena %}
+            <section class="nc-manage-section">
+                <h3>1. Decisione sulla quarantena</h3>
+                <p class="nc-manage-intro">
+                    Ripartisci tutta la quantità in quarantena tra scarto e reintegro.
+                    I campi contrassegnati con <strong>*</strong> sono necessari per la chiusura.
+                </p>
+                <div class="nc-manage-grid">
+                    <div class="nc-manage-field">
+                        <label for="{{ form.quantita_scartata.id_for_label }}">{{ form.quantita_scartata.label }} <span class="nc-required">*</span></label>
+                        {{ form.quantita_scartata }}{{ form.quantita_scartata.errors }}
+                    </div>
+                    <div class="nc-manage-field">
+                        <label for="{{ form.quantita_reintegrata.id_for_label }}">{{ form.quantita_reintegrata.label }} <span class="nc-required">*</span></label>
+                        {{ form.quantita_reintegrata }}{{ form.quantita_reintegrata.errors }}
+                    </div>
+                    <div class="nc-manage-field nc-manage-field-wide">
+                        <label for="{{ form.decisione.id_for_label }}">{{ form.decisione.label }} <span class="nc-required">*</span></label>
+                        {{ form.decisione }}{{ form.decisione.errors }}
+                    </div>
+                </div>
+            </section>
+            {% endif %}
+
+            <section class="nc-manage-section">
+                <h3>{% if non_conformita.quantita_quarantena %}2{% else %}1{% endif %}. Analisi e azione correttiva</h3>
+                <p class="nc-manage-intro">Puoi salvare una lavorazione incompleta; gli asterischi indicano i dati richiesti per chiudere la NC.</p>
+                <div class="nc-manage-grid">
+                    <div class="nc-manage-field nc-manage-field-wide"><label for="{{ form.analisi_cause.id_for_label }}">{{ form.analisi_cause.label }} <span class="nc-required">*</span></label>{{ form.analisi_cause }}{{ form.analisi_cause.errors }}</div>
+                    <div class="nc-manage-field nc-manage-field-wide"><label for="{{ form.azione_risoluzione.id_for_label }}">{{ form.azione_risoluzione.label }} <span class="nc-required">*</span></label>{{ form.azione_risoluzione }}{{ form.azione_risoluzione.errors }}</div>
+                    <div class="nc-manage-field"><label for="{{ form.responsabile_azione.id_for_label }}">{{ form.responsabile_azione.label }} <span class="nc-required">*</span></label>{{ form.responsabile_azione }}{{ form.responsabile_azione.errors }}</div>
+                    <div class="nc-manage-field"><label for="{{ form.data_inizio_gestione.id_for_label }}">{{ form.data_inizio_gestione.label }} <span class="nc-required">*</span></label>{{ form.data_inizio_gestione }}{{ form.data_inizio_gestione.errors }}</div>
+                    <div class="nc-manage-field"><label for="{{ form.azione_immediata.id_for_label }}">{{ form.azione_immediata }} {{ form.azione_immediata.label }}</label>{{ form.azione_immediata.errors }}</div>
+                    <div class="nc-manage-field"><label for="{{ form.scadenza_prevista.id_for_label }}">{{ form.scadenza_prevista.label }} <span class="nc-conditional">— obbligatoria se l’azione non è immediata</span></label>{{ form.scadenza_prevista }}{{ form.scadenza_prevista.errors }}</div>
+                </div>
+            </section>
+
+            <section class="nc-manage-section">
+                <h3>{% if non_conformita.quantita_quarantena %}3{% else %}2{% endif %}. Verifica e chiusura</h3>
+                <div class="nc-manage-grid">
+                    <div class="nc-manage-field"><label for="{{ form.esito_efficacia.id_for_label }}">{{ form.esito_efficacia.label }} <span class="nc-required">*</span></label>{{ form.esito_efficacia }}{{ form.esito_efficacia.errors }}</div>
+                    <div class="nc-manage-field"><label for="{{ form.data_verifica.id_for_label }}">{{ form.data_verifica.label }} <span class="nc-required">*</span></label>{{ form.data_verifica }}{{ form.data_verifica.errors }}</div>
+                    <div class="nc-manage-field nc-manage-field-wide"><label for="{{ form.verifica_efficacia.id_for_label }}">{{ form.verifica_efficacia.label }} <span class="nc-required">*</span></label>{{ form.verifica_efficacia }}{{ form.verifica_efficacia.errors }}</div>
+                </div>
+            </section>
         {% endif %}
         <div class="form-actions">
             <button type="submit" name="azione" value="salva" class="btn btn-secondary">Salva in lavorazione</button>

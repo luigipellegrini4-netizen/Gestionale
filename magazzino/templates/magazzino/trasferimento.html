@@ -53,11 +53,33 @@ Trasferimento - MIRA
 <script>
 (() => {
     const form = document.getElementById("trasferimento-form");
+    const ricerca = document.getElementById("id_ricerca_articolo");
     const articolo = document.getElementById("id_articolo");
     const giacenza = document.getElementById("id_giacenza");
     const destinazione = document.getElementById("id_ubicazione_destinazione");
     const quantita = document.getElementById("id_quantita");
     const valoreIniziale = giacenza.value;
+    const opzioniArticolo = Array.from(articolo.options).map(option => ({
+        value: option.value,
+        text: option.textContent,
+        selected: option.selected,
+    }));
+
+    function filtraArticoli() {
+        const termine = ricerca.value.trim().toLocaleLowerCase("it");
+        const valore = articolo.value;
+        articolo.replaceChildren();
+        for (const dato of opzioniArticolo) {
+            if (dato.value && termine && !dato.text.toLocaleLowerCase("it").includes(termine)) continue;
+            const option = new Option(dato.text, dato.value);
+            option.selected = dato.value === valore || (!valore && dato.selected);
+            articolo.add(option);
+        }
+        if (valore && articolo.value !== valore) {
+            articolo.value = "";
+            caricaDisponibilita();
+        }
+    }
 
     function aggiornaDestinazioni(origineId) {
         for (const option of destinazione.options) {
@@ -107,6 +129,7 @@ Trasferimento - MIRA
     }
 
     articolo.addEventListener("change", caricaDisponibilita);
+    ricerca.addEventListener("input", filtraArticoli);
     giacenza.addEventListener("change", aggiornaLimite);
     caricaDisponibilita();
 })();

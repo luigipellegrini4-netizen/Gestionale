@@ -19,7 +19,7 @@ CONFIGURAZIONI_CSV = {
     },
     "ubicazioni": {
         "headers": [
-            "nome", "tipo_magazzino", "scaffale", "piano", "attiva",
+            "nome", "tipo_magazzino", "attiva",
         ],
         "model": Ubicazione,
         "form": UbicazioneForm,
@@ -28,10 +28,9 @@ CONFIGURAZIONI_CSV = {
     "articoli": {
         "headers": [
             "codice", "descrizione", "nome_produzione", "categoria", "unita_misura",
-            "quantita_per_confezione", "formato", "unita_formato",
             "scorta_minima",
             "tipo_packaging",
-            "pezzi_per_imballo", "attivo",
+            "attivo",
             "note",
         ],
         "model": Articolo,
@@ -100,10 +99,6 @@ def importa_csv(tipo, contenuto):
         campo_attivo = "attiva" if tipo == "ubicazioni" else "attivo"
         dati[campo_attivo] = _normalizza_booleano(dati[campo_attivo])
         if tipo == "articoli":
-            dati["quantita_per_confezione"] = dati[
-                "quantita_per_confezione"
-            ].replace(",", ".")
-            dati["formato"] = dati["formato"].replace(",", ".")
             dati["scorta_minima"] = dati["scorta_minima"].replace(",", ".")
 
         esistente = configurazione["model"].objects.filter(

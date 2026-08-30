@@ -1,8 +1,8 @@
 {% if page_obj.paginator.num_pages > 1 %}
 <nav class="pagination" aria-label="Navigazione pagine">
     {% if page_obj.has_previous %}
-        <a href="?page=1">Prima</a>
-        <a href="?page={{ page_obj.previous_page_number }}">Precedente</a>
+        <a href="{% querystring page=1 %}">Prima</a>
+        <a href="{% querystring page=page_obj.previous_page_number %}">Precedente</a>
     {% endif %}
 
     <span>
@@ -10,8 +10,8 @@
     </span>
 
     {% if page_obj.has_next %}
-        <a href="?page={{ page_obj.next_page_number }}">Successiva</a>
-        <a href="?page={{ page_obj.paginator.num_pages }}">Ultima</a>
+        <a href="{% querystring page=page_obj.next_page_number %}">Successiva</a>
+        <a href="{% querystring page=page_obj.paginator.num_pages %}">Ultima</a>
     {% endif %}
 </nav>
 {% endif %}

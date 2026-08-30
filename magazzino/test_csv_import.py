@@ -43,12 +43,12 @@ class ImportazioneCSVTests(TestCase):
         self.assertIn("attachment", response["Content-Disposition"])
         self.assertIn("codice;ragione_sociale", response.content.decode("utf-8-sig"))
 
-    def test_template_articoli_include_quantita_per_confezione(self):
+    def test_template_articoli_include_i_soli_campi_anagrafici(self):
         response = self.client.get(reverse("template_csv", args=["articoli"]))
 
         self.assertEqual(response.status_code, 200)
         self.assertIn(
-            "unita_misura;quantita_per_confezione;formato;unita_formato;scorta_minima",
+            "unita_misura;scorta_minima",
             response.content.decode("utf-8-sig"),
         )
 
@@ -100,24 +100,41 @@ class ImportazioneCSVTests(TestCase):
     def test_importa_ubicazione_e_articolo(self):
         self.carica(
             "ubicazioni",
-            "nome;tipo_magazzino;scaffale;piano;attiva\n"
-            "Cella A;MP;S1;P2;si\n",
+            "nome;tipo_magazzino;attiva\n"
+            "Cella A;MP;si\n",
         )
         self.carica(
             "articoli",
             "codice;descrizione;nome_produzione;categoria;unita_misura;"
-            "quantita_per_confezione;formato;unita_formato;scorta_minima;"
-            "tipo_packaging;pezzi_per_imballo;"
+            "scorta_minima;tipo_packaging;"
             "attivo;note\n"
-            "MP-CSV;Materia prima CSV;Materia CSV;MATERIA_PRIMA;KG;1,25;250;G;2,5;"
-            ";;vero;\n",
+            "MP-CSV;Materia prima CSV;Materia CSV;MATERIA_PRIMA;KG;2,5;"
+            ";vero;\n",
         )
 
         self.assertTrue(Ubicazione.objects.filter(nome="Cella A").exists())
         articolo = Articolo.objects.get(codice="MP-CSV")
         self.assertEqual(articolo.descrizione, "Materia prima CSV")
         self.assertEqual(articolo.nome_produzione, "Materia CSV")
-        self.assertEqual(articolo.quantita_per_confezione, Decimal("1.250"))
-        self.assertEqual(articolo.formato, Decimal("250"))
-        self.assertEqual(articolo.unita_formato, Articolo.UnitaFormato.G)
         self.assertEqual(str(articolo.scorta_minima), "2.500")
+
+    def test_importa_articoli_consumabili_e_ricambi(self):
+        response = self.carica(
+            "articoli",
+            "codice;descrizione;nome_produzione;categoria;unita_misura;"
+            "scorta_minima;tipo_packaging;attivo;note\n"
+            "CONS-CSV;Guanti monouso;;CONSUMABILI;PZ;10;;vero;\n"
+            "RIC-CSV;Guarnizione macchina;;RICAMBI;PZ;2;;vero;\n",
+        )
+
+        self.assertRedirects(response, reverse("importazione_csv"))
+        self.assertTrue(
+            Articolo.objects.filter(
+                codice="CONS-CSV", categoria=Articolo.Categoria.CONSUMABILI,
+            ).exists()
+        )
+        self.assertTrue(
+            Articolo.objects.filter(
+                codice="RIC-CSV", categoria=Articolo.Categoria.RICAMBI,
+            ).exists()
+        )

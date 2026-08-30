@@ -1,27 +1,102 @@
 {% extends "magazzino/base.html" %}
 {% block title %}Produzione {{ produzione.articolo.codice }} - MIRA{% endblock %}
 {% block content %}
+<style>
+    .roboqbo-page { --rq-blue:#175cd3; --rq-green:#067647; --rq-amber:#b54708; --rq-red:#b42318; --rq-border:#d0d5dd; }
+    .rq-status-grid { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:.75rem; margin:1rem 0; }
+    .rq-status { padding:1rem; border:1px solid var(--rq-border); border-radius:12px; background:#fff; box-shadow:0 1px 2px rgba(16,24,40,.05); }
+    .rq-status span { display:block; color:#667085; font-size:.8rem; text-transform:uppercase; letter-spacing:.04em; margin-bottom:.25rem; }
+    .rq-status strong { display:block; font-size:1.05rem; overflow-wrap:anywhere; }
+    .rq-next { display:flex; gap:.8rem; align-items:flex-start; padding:1rem 1.1rem; margin-bottom:1rem; border-radius:10px; border-left:5px solid var(--rq-blue); background:#eff8ff; }
+    .rq-next.warning { border-left-color:var(--rq-amber); background:#fffaeb; }
+    .rq-next.error { border-left-color:var(--rq-red); background:#fef3f2; }
+    .rq-next-icon { display:grid; place-items:center; min-width:30px; height:30px; border-radius:50%; background:var(--rq-blue); color:#fff; font-weight:800; }
+    .rq-next.warning .rq-next-icon { background:var(--rq-amber); }
+    .rq-next.error .rq-next-icon { background:var(--rq-red); }
+    .rq-next p { margin:.15rem 0 0; }
+    .roboqbo-page > .card { border:1px solid var(--rq-border); border-radius:12px; box-shadow:0 1px 3px rgba(16,24,40,.08); margin-bottom:1rem; }
+    .roboqbo-page > .card > h3:first-child { margin-top:0; padding-bottom:.7rem; border-bottom:1px solid #eaecf0; }
+    #preparazione { border-left:5px solid var(--rq-green); }
+    #roboqubo { border-left:5px solid var(--rq-blue); }
+    #roboqubo h4 { margin:1.25rem 0 .6rem; padding:.65rem .8rem; border-radius:8px; background:#f2f4f7; color:#344054; }
+    #form-registra-batch { padding:1rem; border:1px solid #b2ddff; border-radius:10px; background:#f5fbff; }
+    #form-registra-batch p { display:grid; grid-template-columns:minmax(210px,1fr) minmax(220px,2fr); gap:.75rem; align-items:center; }
+    #form-registra-batch label { font-weight:650; }
+    #controlli-tank + form { padding:1rem; border:1px solid #abefc6; border-radius:10px; background:#f6fef9; }
+    #preparazione table input { min-width:120px; width:100%; box-sizing:border-box; }
+    #preparazione details { margin-top:1rem; border-top:1px solid #eaecf0; padding-top:.8rem; }
+    #preparazione details summary { cursor:pointer; font-weight:700; color:var(--rq-blue); }
+    .rq-complete { color:var(--rq-green); }
+    .roboqbo-page table { font-size:.94rem; }
+    @media (max-width:1000px) { .rq-status-grid { grid-template-columns:repeat(3,minmax(0,1fr)); } }
+    @media (max-width:650px) { .rq-status-grid { grid-template-columns:1fr 1fr; } #form-registra-batch p { grid-template-columns:1fr; gap:.25rem; } }
+    @media (max-width:430px) { .rq-status-grid { grid-template-columns:1fr; } }
+</style>
+<div class="roboqbo-page">
 <div class="page-header"><div><h2>Produzione {{ produzione.articolo.codice }}</h2><p>{{ produzione.articolo.descrizione }}</p></div><a href="{% url 'elenco_produzioni' %}" class="btn btn-secondary">Elenco produzioni</a></div>
-<div class="card"><h3>Dati produzione</h3><div class="detail-grid"><div><strong>Inizio</strong><br>{{ produzione.data_produzione|date:"d/m/Y" }}</div><div><strong>Lotto provvisorio</strong><br>{{ produzione.lotto_provvisorio }}</div><div><strong>Batch previsti</strong><br>{{ produzione.numero_batch_previsti }}</div><div><strong>Fase</strong><br>{{ produzione.get_fase_display }}</div><div><strong>Stato RoboQubo</strong><br>{{ produzione.get_stato_roboqubo_display }}</div></div></div>
+<div class="rq-status-grid" aria-label="Stato produzione RoboQbo">
+    <div class="rq-status"><span>Lotto temporaneo</span><strong>{{ produzione.lotto_provvisorio }}</strong></div>
+    <div class="rq-status"><span>Preparazione</span><strong>{% if produzione.preparazione_chiusa_il %}<span class="rq-complete">✓ Conclusa</span>{% else %}Da completare{% endif %}</strong></div>
+    <div class="rq-status"><span>Batch</span><strong>{{ batch_registrati|length }} / {{ produzione.numero_batch_previsti }}</strong></div>
+    <div class="rq-status"><span>Tank</span><strong>{{ tank|length }}</strong></div>
+    <div class="rq-status"><span>RoboQbo</span><strong>{{ produzione.get_stato_roboqubo_display }}</strong></div>
+</div>
+
+{% if produzione.bloccata_da_nc and produzione.bloccata_da_nc.stato != "CHIUSA" %}
+<div class="rq-next error"><span class="rq-next-icon">!</span><div><strong>Produzione bloccata</strong><p>Il Responsabile Qualità deve risolvere la NC-{{ produzione.bloccata_da_nc.pk }} prima di proseguire.</p></div></div>
+{% elif produzione.fase == "PREPARAZIONE" %}
+<div class="rq-next"><span class="rq-next-icon">1</span><div><strong>Prossimo passo: completa la preparazione</strong><p>Controlla le quantità, registra i prelievi e chiudi la preparazione.</p></div></div>
+{% elif produzione.stato_roboqubo == "SOSPESA" %}
+<div class="rq-next warning"><span class="rq-next-icon">!</span><div><strong>RoboQbo sospeso per NC</strong><p>Puoi ancora assegnare ai tank i batch conformi già lavorati.</p></div></div>
+{% elif tank_corrente %}
+<div class="rq-next"><span class="rq-next-icon">→</span><div><strong>Prossimo passo: controlla Tank {{ tank_corrente.numero }}</strong><p>Registra °Brix e pH per chiudere il tank.</p></div></div>
+{% elif batch_non_assegnati %}
+<div class="rq-next"><span class="rq-next-icon">→</span><div><strong>Prossimo passo: crea un tank</strong><p>Seleziona i batch conformi lavorati da trasferire nel tank.</p></div></div>
+{% elif produzione.fase == "ROBOQUBO" and puo_registrare_batch %}
+<div class="rq-next"><span class="rq-next-icon">→</span><div><strong>Prossimo passo: registra il batch successivo</strong><p>Inserisci orari, conformità del tracciato e note.</p></div></div>
+{% elif produzione.roboqubo_chiuso_il %}
+<div class="rq-next"><span class="rq-next-icon">✓</span><div><strong>Fase RoboQbo conclusa</strong><p>La lavorazione può proseguire nell’area invasettamento.</p></div></div>
+{% endif %}
+<div class="card"><h3>Dati produzione</h3><div class="detail-grid"><div><strong>Inizio</strong><br>{{ produzione.data_produzione|date:"d/m/Y" }}</div><div><strong>Lotto provvisorio</strong><br>{{ produzione.lotto_provvisorio }}</div><div><strong>Batch previsti</strong><br>{{ produzione.numero_batch_previsti }}</div><div><strong>Fase</strong><br>{{ produzione.get_fase_display }}</div><div><strong>Stato RoboQbo</strong><br>{{ produzione.get_stato_roboqubo_display }}</div></div></div>
 {% if produzione.bloccata_da_nc and produzione.bloccata_da_nc.stato != "CHIUSA" %}<div class="message error"><strong>PRODUZIONE BLOCCATA DALLA NC-{{ produzione.bloccata_da_nc.pk }}.</strong><br>Non può essere completata finché il Responsabile Qualità non risolve la non conformità. <a href="{% url 'dettaglio_non_conformita' produzione.bloccata_da_nc.pk %}">Apri la NC</a>.</div>{% endif %}
 
 <div class="card" id="preparazione"><h3>1. Preparazione {% if produzione.preparazione_chiusa_il %}✓{% endif %}</h3>
-{% if produzione.fase == "PREPARAZIONE" %}<p>Quantità di ricetta per <strong>{{ produzione.numero_batch_previsti }} batch</strong>. Correggile se necessario.</p><form method="post">{% csrf_token %}<input type="hidden" name="azione" value="chiudi_preparazione"><table><thead><tr><th>Ingrediente</th><th>Teorico</th><th>Effettivo</th><th>Note</th></tr></thead><tbody>{% for e in ingredienti_ricetta %}<tr><td>{{ e.riga.articolo.codice }} - {{ e.riga.articolo.descrizione }}</td><td>{{ e.quantita_prevista }} {{ e.riga.articolo.unita_misura }}</td><td><input type="number" min="0.001" step="0.001" required name="quantita_{{ e.riga.articolo_id }}" value="{{ e.quantita_input }}"></td><td><input type="text" name="note_prelievo_{{ e.riga.articolo_id }}"></td></tr>{% endfor %}</tbody></table><button class="btn">Registra prelievi e chiudi Preparazione</button></form>{% else %}<p>Chiusa il {{ produzione.preparazione_chiusa_il|date:"d/m/Y H:i" }}.</p>{% endif %}
+{% if produzione.fase == "PREPARAZIONE" %}
+<p>Quantità di ricetta per <strong>{{ produzione.numero_batch_previsti }} batch</strong>. Correggile se necessario.</p>
+<form method="post">
+{% csrf_token %}<input type="hidden" name="azione" value="chiudi_preparazione">
+<table><thead><tr><th>Ingrediente</th><th>Teorico</th><th>Effettivo</th><th>Note</th></tr></thead><tbody>
+{% for e in ingredienti_ricetta %}<tr><td>{{ e.riga.articolo.codice }} - {{ e.riga.articolo.descrizione }}</td><td>{{ e.quantita_prevista }} {{ e.riga.articolo.unita_misura }}</td><td><input type="number" min="0.001" step="0.001" required name="quantita_{{ e.riga.articolo_id }}" value="{{ e.quantita_input }}"></td><td><input type="text" name="note_prelievo_{{ e.riga.articolo_id }}"></td></tr>{% endfor %}
+</tbody></table>
+<div class="form-actions"><button class="btn">Registra prelievi e chiudi preparazione</button><button class="btn btn-secondary" type="button" onclick="document.getElementById('selezione-lotti').showModal()">Seleziona manualmente lotti</button></div>
+</form>
+<dialog id="selezione-lotti" style="width:min(1100px,95vw);max-height:90vh;overflow:auto">
+<form method="post">
+{% csrf_token %}<input type="hidden" name="azione" value="chiudi_preparazione_manuale">
+<div class="page-header"><div><h3>Selezione manuale dei lotti</h3><p>Seleziona una o più giacenze per ciascun ingrediente. MIRA preleverà la quantità effettiva indicata usando soltanto le righe selezionate.</p></div><button type="button" class="btn btn-secondary" onclick="document.getElementById('selezione-lotti').close()">Chiudi</button></div>
+<div class="table-container"><table><thead><tr><th>Ingrediente</th><th>Teorico</th><th>Effettivo</th><th>Lotti disponibili e ubicazioni</th><th>Note</th></tr></thead><tbody>
+{% for e in ingredienti_ricetta %}<tr><td><strong>{{ e.riga.articolo.codice }}</strong><br>{{ e.riga.articolo.descrizione }}</td><td>{{ e.quantita_prevista }} {{ e.riga.articolo.unita_misura }}</td><td><input type="number" min="0.001" step="0.001" required name="quantita_{{ e.riga.articolo_id }}" value="{{ e.quantita_input }}"></td><td>{% for g in e.giacenze_disponibili %}<label style="display:block;margin:.35rem 0"><input type="checkbox" name="giacenze_{{ e.riga.articolo_id }}" value="{{ g.pk }}"> Lotto {{ g.lotto.codice_visualizzato }} — {{ g.quantita }} {{ e.riga.articolo.unita_misura }} — {{ g.ubicazione.nome }}{% if g.scaffale %}, scaffale {{ g.scaffale }}{% endif %}{% if g.piano %}, piano {{ g.piano }}{% endif %}</label>{% empty %}<strong>Nessuna giacenza disponibile</strong>{% endfor %}</td><td><input type="text" name="note_prelievo_{{ e.riga.articolo_id }}"></td></tr>{% endfor %}
+</tbody></table></div>
+<button class="btn">Registra prelievi selezionati e chiudi preparazione</button>
+</form></dialog>
+{% else %}<p>Chiusa il {{ produzione.preparazione_chiusa_il|date:"d/m/Y H:i" }}.</p>{% endif %}
+{% if produzione.stato == "BOZZA" and not produzione.batch.exists %}<form method="post" onsubmit="return confirm('Ciascun materiale viene riportato nel magazzino di partenza. Confermi l’annullamento della produzione?')">{% csrf_token %}<input type="hidden" name="azione" value="annulla_produzione"><button class="btn btn-danger">Annulla produzione</button></form>{% endif %}
 {% if prelievi %}<details><summary>Lotti e ubicazioni prelevati</summary><table><thead><tr><th>Articolo</th><th>Lotto</th><th>Ubicazione</th><th>Quantità</th></tr></thead><tbody>{% for p in prelievi %}<tr><td>{{ p.lotto.articolo }}</td><td>{{ p.lotto.codice_lotto }}</td><td>{{ p.ubicazione_origine }}{% if p.scaffale_origine %}, scaffale {{ p.scaffale_origine }}{% endif %}{% if p.piano_origine %}, piano {{ p.piano_origine }}{% endif %}</td><td>{{ p.quantita_prelevata }}</td></tr>{% endfor %}</tbody></table></details>{% endif %}</div>
 
-<div class="card" id="roboqubo"><h3>2. RoboQubo {% if produzione.roboqubo_chiuso_il %}✓{% endif %}</h3>
+<div class="card" id="roboqubo"><h3>2. RoboQbo {% if produzione.roboqubo_chiuso_il %}✓{% endif %}</h3>
 {% if produzione.stato_roboqubo == "SOSPESA" %}<div class="message error"><strong>FASE ROBOQUBO SOSPESA PER NON CONFORMITÀ.</strong><br>Non è possibile registrare altri batch finché il Responsabile Qualità non conclude la valutazione. L’invasettamento dei tank già completati può proseguire.</div>{% elif produzione.stato_roboqubo == "CON_NC" %}<div class="message warning"><strong>Produzione in corso con NC aperta.</strong> I batch in quarantena sono esclusi dai tank.</div>{% endif %}
 {% if batch_registrati %}<table><thead><tr><th>Batch</th><th>Orario</th><th>82 °C × 60 sec</th><th>Stato</th><th>Tank</th><th>NC</th><th>Note</th></tr></thead><tbody>{% for b in batch_registrati %}<tr><td>{{ b.numero }}</td><td>{% if b.ora_inizio and b.ora_fine %}{{ b.ora_inizio|time:"H:i" }}–{{ b.ora_fine|time:"H:i" }}{% else %}—{% endif %}</td><td><strong>{{ b.get_esito_conformita_display|default:"—" }}</strong></td><td><strong>{{ b.get_stato_display }}</strong></td><td>{% if b.tank %}Tank {{ b.tank.numero }}{% elif b.stato == "QUARANTENA" or b.stato == "SCARTATO" %}Escluso{% else %}Da assegnare{% endif %}</td><td>{% if b.non_conformita %}<a href="{% url 'dettaglio_non_conformita' b.non_conformita.pk %}">NC-{{ b.non_conformita.pk }}</a>{% else %}—{% endif %}</td><td>{{ b.note|default:"—" }}</td></tr>{% endfor %}</tbody></table>{% endif %}
 {% if produzione.fase == "ROBOQUBO" and produzione.stato_roboqubo != "SOSPESA" and produzione.stato_roboqubo != "CONCLUSA" and puo_registrare_batch %}
 <h4>Registra il prossimo batch</h4><form method="post" id="form-registra-batch">{% csrf_token %}<input type="hidden" name="azione" value="registra_batch">{{ batch_form.as_p }}<button class="btn">Registra batch</button></form>
 {% endif %}
 {% if batch_non_assegnati and produzione.fase == "ROBOQUBO" or batch_non_assegnati and produzione.chiusa_per_nc %}
-<h4>Assegna a un tank i batch conformi già lavorati</h4><p>Anche con RoboQubo sospeso puoi trasferire nei tank i batch precedenti alla NC.</p><form method="post">{% csrf_token %}<input type="hidden" name="azione" value="crea_tank_da_batch">{% for b in batch_non_assegnati %}<label style="display:inline-block;margin-right:1rem"><input type="checkbox" name="batch_ids" value="{{ b.pk }}" checked> Batch {{ b.numero }}</label>{% endfor %}<br><button class="btn">Crea tank dai batch selezionati</button></form>
+<h4>Assegna a un tank i batch conformi già lavorati</h4><p>Anche con RoboQbo sospeso puoi trasferire nei tank i batch precedenti alla NC.</p><form method="post">{% csrf_token %}<input type="hidden" name="azione" value="crea_tank_da_batch">{% for b in batch_non_assegnati %}<label style="display:inline-block;margin-right:1rem"><input type="checkbox" name="batch_ids" value="{{ b.pk }}" checked> Batch {{ b.numero }}</label>{% endfor %}<br><button class="btn">Crea tank dai batch selezionati</button></form>
 {% endif %}
 {% if tank %}<h4>Tank</h4><table><thead><tr><th>Tank</th><th>Batch</th><th>°Brix (40–45)</th><th>pH (&lt;4,1)</th><th>Esito</th><th>Operazione</th></tr></thead><tbody>{% for t in tank %}<tr><td>{{ t.numero }}</td><td>{% for b in t.batch.all %}{{ b.numero }}{% if not forloop.last %}, {% endif %}{% endfor %}</td><td>{{ t.gradi_brix|default:"Da registrare" }}</td><td>{{ t.ph|default:"Da registrare" }}</td><td>{% if t.controllato %}{% if t.conforme %}Conforme{% else %}<strong>NON CONFORME</strong>{% endif %}{% else %}Aperto{% endif %}</td><td>{% if not t.annullato %}<a class="btn btn-danger" href="{% url 'annulla_tank' t.pk %}">Annulla tank</a>{% else %}Annullato{% endif %}</td></tr>{% endfor %}</tbody></table>{% endif %}
-{% if tank_corrente and produzione.fase == "ROBOQUBO" or tank_corrente and produzione.chiusa_per_nc %}<h4 id="controlli-tank">Chiudi Tank {{ tank_corrente.numero }}</h4><form method="post">{% csrf_token %}<input type="hidden" name="azione" value="controlla_tank">{{ controllo_tank_form.as_p }}<button class="btn">Registra pH e °Brix</button></form>{% endif %}{% if produzione.fase == "ROBOQUBO" %}<form method="post">{% csrf_token %}<input type="hidden" name="azione" value="chiudi_roboqubo"><button class="btn">Concludi RoboQubo</button></form>{% endif %}</div>
+{% if tank_corrente and produzione.fase == "ROBOQUBO" or tank_corrente and produzione.chiusa_per_nc %}<h4 id="controlli-tank">Chiudi Tank {{ tank_corrente.numero }}</h4><form method="post">{% csrf_token %}<input type="hidden" name="azione" value="controlla_tank">{{ controllo_tank_form.as_p }}<button class="btn">Registra pH e °Brix</button></form>{% endif %}{% if produzione.fase == "ROBOQUBO" %}<form method="post">{% csrf_token %}<input type="hidden" name="azione" value="chiudi_roboqubo"><button class="btn">Concludi RoboQbo</button></form>{% endif %}</div>
 
-<script>document.addEventListener("DOMContentLoaded",function(){const form=document.getElementById("form-registra-batch");if(!form)return;form.addEventListener("submit",function(event){const esito=form.querySelector('input[name="esito_conformita"]:checked');const proseguimento=form.querySelector('[name="produzione_puo_proseguire"]');if(esito&&esito.value==="NC"&&proseguimento&&proseguimento.value==="NO"){const messaggio="I batch non ancora lavorati vengono trasferiti su una nuova produzione e le materie prime e i SL vengono trasferiti nel magazzino di produzione. La fase RoboQubo viene chiusa.";if(!window.confirm(messaggio)){event.preventDefault();}}});});</script>
+<script>document.addEventListener("DOMContentLoaded",function(){const form=document.getElementById("form-registra-batch");if(!form)return;form.addEventListener("submit",function(event){const esito=form.querySelector('input[name="esito_conformita"]:checked');const proseguimento=form.querySelector('[name="produzione_puo_proseguire"]');if(esito&&esito.value==="NC"&&proseguimento&&proseguimento.value==="NO"){const messaggio="I batch non ancora lavorati vengono trasferiti su una nuova produzione e le materie prime e i SL vengono trasferiti nel magazzino di produzione. La fase RoboQbo viene chiusa.";if(!window.confirm(messaggio)){event.preventDefault();}}});});</script>
 
 {% if produzione.stato == "CONFERMATA" %}<div class="card"><h3>Risultato finale</h3><p>Lotto <a href="{% url 'dettaglio_lotto' produzione.lotto.pk %}">{{ produzione.lotto.codice_lotto }}</a>, {{ produzione.quantita_prodotta }} vasetti buoni · {{ produzione.peso_netto_vasetto_g }} g netti per vasetto · {{ produzione.quantita_ottenuta_kg }} kg ottenuti · resa {{ produzione.resa_percentuale }}%.</p></div>{% endif %}
+</div>
 {% endblock %}

@@ -4,15 +4,93 @@
 <div class="page-header">
     <div><h2>Apri non conformità</h2><p>Compilazione della segnalazione da parte dell'operatore.</p></div>
 </div>
-<div class="form-card">
+<style>
+    .nc-form { max-width: 960px; }
+    .nc-section { border: 1px solid #d9e0e7; border-radius: 10px; padding: 1.2rem; margin-bottom: 1rem; background: #fff; }
+    .nc-section h3 { margin: 0 0 .25rem; }
+    .nc-section-intro { color: #59636e; margin: 0 0 1rem; }
+    .nc-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+    .nc-field-wide { grid-column: 1 / -1; }
+    .nc-field label { display: block; font-weight: 650; margin-bottom: .35rem; }
+    .nc-field input:not([type="checkbox"]), .nc-field select, .nc-field textarea { width: 100%; box-sizing: border-box; }
+    .nc-required { color: #b42318; font-weight: 800; }
+    .nc-optional { color: #667085; font-size: .85rem; font-weight: 400; }
+    .nc-help { display: block; color: #667085; font-size: .9rem; margin-top: .3rem; }
+    .nc-error { color: #b42318; margin: .3rem 0 0; padding-left: 1.1rem; }
+    .nc-quarantine.is-disabled { opacity: .58; background: #f5f6f7; }
+    @media (max-width: 720px) { .nc-grid { grid-template-columns: 1fr; } .nc-field-wide { grid-column: auto; } }
+</style>
+<div class="form-card nc-form">
     <div class="message warning">
-        Se la NC riguarda un lotto, cercalo e indica posizione e numero di UDA:
-        la quantità corrispondente sarà resa immediatamente non disponibile.
+        I campi contrassegnati con <strong>*</strong> sono obbligatori. Il lotto è
+        facoltativo. La posizione può essere annotata senza quarantena; unità e
+        quantità servono soltanto se il materiale deve essere reso non disponibile.
     </div>
     {% if form.non_field_errors %}{% for error in form.non_field_errors %}<div class="message error">{{ error }}</div>{% endfor %}{% endif %}
     <form method="post">
         {% csrf_token %}
-        {{ form.as_p }}
+        <section class="nc-section">
+            <h3>1. Segnalazione</h3>
+            <p class="nc-section-intro">Classifica e descrivi la non conformità.</p>
+            <div class="nc-grid">
+                <div class="nc-field">
+                    <label for="{{ form.ambito.id_for_label }}">{{ form.ambito.label }} <span class="nc-required">*</span></label>
+                    {{ form.ambito }}{{ form.ambito.errors }}
+                </div>
+                <div class="nc-field">
+                    <label for="{{ form.tipo_nc.id_for_label }}">{{ form.tipo_nc.label }} <span class="nc-required">*</span></label>
+                    {{ form.tipo_nc }}{{ form.tipo_nc.errors }}
+                </div>
+                <div class="nc-field nc-field-wide">
+                    <label for="{{ form.motivo.id_for_label }}">{{ form.motivo.label }} <span class="nc-required">*</span></label>
+                    {{ form.motivo }}{{ form.motivo.errors }}
+                </div>
+                <div class="nc-field nc-field-wide">
+                    <label for="{{ form.note_apertura.id_for_label }}">{{ form.note_apertura.label }} <span class="nc-optional">— facoltativo</span></label>
+                    {{ form.note_apertura }}{{ form.note_apertura.errors }}
+                </div>
+            </div>
+        </section>
+
+        <section class="nc-section">
+            <h3>2. Lotto coinvolto <span class="nc-optional">— facoltativo</span></h3>
+            <p class="nc-section-intro">Puoi collegare la NC a un lotto senza metterlo in quarantena.</p>
+            <div class="nc-grid">
+                <div class="nc-field nc-field-wide">
+                    <label for="{{ form.ricerca_lotto.id_for_label }}">{{ form.ricerca_lotto.label }}</label>
+                    {{ form.ricerca_lotto }}
+                    <span class="nc-help">Digita almeno due caratteri, quindi scegli il lotto trovato.</span>
+                    {{ form.ricerca_lotto.errors }}
+                </div>
+                <div class="nc-field nc-field-wide">
+                    <label for="{{ form.lotto.id_for_label }}">{{ form.lotto.label }}</label>
+                    {{ form.lotto }}{{ form.lotto.errors }}
+                </div>
+                <div class="nc-field nc-field-wide">
+                    <label for="{{ form.giacenza.id_for_label }}">Posizione coinvolta <span class="nc-optional">— facoltativa</span></label>
+                    {{ form.giacenza }}{{ form.giacenza.errors }}
+                    <span class="nc-help">La posizione può essere registrata anche senza mettere materiale in quarantena.</span>
+                </div>
+            </div>
+        </section>
+
+        <section class="nc-section nc-quarantine" id="quarantena-section">
+            <h3>3. Quarantena <span class="nc-optional">— facoltativa</span></h3>
+            <p class="nc-section-intro">
+                Se vuoi mettere materiale in quarantena, indica unità e quantità.
+                La quantità corrispondente verrà sottratta dalla disponibilità.
+            </p>
+            <div class="nc-grid">
+                <div class="nc-field">
+                    <label for="{{ form.unita_quarantena.id_for_label }}">Unità</label>
+                    {{ form.unita_quarantena }}{{ form.unita_quarantena.errors }}
+                </div>
+                <div class="nc-field">
+                    <label for="{{ form.quantita_quarantena_input.id_for_label }}">Quantità</label>
+                    {{ form.quantita_quarantena_input }}{{ form.quantita_quarantena_input.errors }}
+                </div>
+            </div>
+        </section>
         <div class="form-actions">
             <button type="submit" class="btn btn-danger">Apri non conformità</button>
             <a href="{% url 'registro_non_conformita' %}" class="btn btn-secondary">Registro NC</a>
@@ -24,16 +102,35 @@
     const ricerca = document.getElementById("id_ricerca_lotto");
     const lotto = document.getElementById("id_lotto");
     const giacenza = document.getElementById("id_giacenza");
+    const unitaQuarantena = document.getElementById("id_unita_quarantena");
+    const quantitaQuarantena = document.getElementById("id_quantita_quarantena_input");
+    const quarantena = document.getElementById("quarantena-section");
     let timer;
+
+    function aggiornaQuarantena() {
+        const abilitata = Boolean(lotto.value);
+        giacenza.disabled = !abilitata;
+        unitaQuarantena.disabled = !abilitata;
+        quantitaQuarantena.disabled = !abilitata;
+        quarantena.classList.toggle("is-disabled", !abilitata);
+        if (!abilitata) {
+            giacenza.value = "";
+            unitaQuarantena.value = "";
+            quantitaQuarantena.value = "";
+        }
+    }
 
     function caricaPosizioni() {
         giacenza.innerHTML = '<option value="">Seleziona una posizione</option>';
-        if (!lotto.value) return;
+        if (!lotto.value) {
+            aggiornaQuarantena();
+            return;
+        }
         fetch("{% url 'posizioni_lotto_non_conformita' %}?lotto=" + encodeURIComponent(lotto.value))
             .then(response => response.json())
             .then(data => data.posizioni.forEach(item => {
                 giacenza.add(new Option(item.label, item.id));
-            }));
+            })).then(aggiornaQuarantena);
     }
 
     ricerca.addEventListener("input", function () {
@@ -47,10 +144,12 @@
                     lotto.innerHTML = '<option value="">Nessun lotto selezionato</option>';
                     data.risultati.forEach(item => lotto.add(new Option(item.label, item.id)));
                     giacenza.innerHTML = '<option value="">Seleziona prima un lotto</option>';
+                    aggiornaQuarantena();
                 });
         }, 250);
     });
     lotto.addEventListener("change", caricaPosizioni);
+    aggiornaQuarantena();
 }());
 </script>
 {% endblock %}

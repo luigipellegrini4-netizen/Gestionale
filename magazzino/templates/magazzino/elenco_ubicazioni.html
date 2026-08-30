@@ -6,7 +6,7 @@
 <div class="page-header">
     <div>
         <h2>Ubicazioni</h2>
-        <p>Celle, scaffali e posizioni dei magazzini.</p>
+        <p>Magazzini e celle disponibili.</p>
     </div>
     <div class="page-actions">
         <a href="{% url 'nuova_ubicazione' %}" class="btn">Nuova ubicazione</a>
@@ -16,15 +16,13 @@
 <div class="table-container">
     <table>
         <thead>
-            <tr><th>Nome</th><th>Magazzino</th><th>Scaffale</th><th>Piano</th><th>Stato</th><th>Azioni</th></tr>
+            <tr><th>Nome</th><th>Magazzino</th><th>Stato</th><th>Azioni</th></tr>
         </thead>
         <tbody>
             {% for ubicazione in ubicazioni %}
                 <tr>
                     <td><strong>{{ ubicazione.nome }}</strong></td>
                     <td>{{ ubicazione.get_tipo_magazzino_display }}</td>
-                    <td>{{ ubicazione.scaffale|default:"—" }}</td>
-                    <td>{{ ubicazione.piano|default:"—" }}</td>
                     <td>{% if ubicazione.attiva %}Attiva{% else %}Non attiva{% endif %}</td>
                     <td>
                         <a href="{% url 'modifica_ubicazione' ubicazione.pk %}"
@@ -32,7 +30,7 @@
                     </td>
                 </tr>
             {% empty %}
-                <tr><td colspan="6">Nessuna ubicazione registrata.</td></tr>
+                <tr><td colspan="4">Nessuna ubicazione registrata.</td></tr>
             {% endfor %}
         </tbody>
     </table>

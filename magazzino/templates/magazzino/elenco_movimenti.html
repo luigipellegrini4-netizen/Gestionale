@@ -6,6 +6,15 @@ Movimenti di magazzino - MIRA
 
 {% block content %}
 
+<style>
+    .filter-card { background: #fff; border: 1px solid #d9e0e7; border-radius: 10px; padding: 1rem; margin-bottom: 1rem; }
+    .filter-grid { display: grid; grid-template-columns: minmax(240px, 2fr) repeat(4, minmax(140px, 1fr)); gap: .8rem; align-items: end; }
+    .filter-grid label { display: block; font-weight: 650; margin-bottom: .3rem; }
+    .filter-grid input, .filter-grid select { width: 100%; box-sizing: border-box; }
+    @media (max-width: 900px) { .filter-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    @media (max-width: 560px) { .filter-grid { grid-template-columns: 1fr; } }
+</style>
+
 <div class="page-header">
     <div>
         <h2>Movimenti di magazzino</h2>
@@ -13,9 +22,38 @@ Movimenti di magazzino - MIRA
     </div>
 </div>
 
+<form method="get" class="filter-card">
+    <div class="filter-grid">
+        <div>
+            <label for="filtro-q">Ricerca</label>
+            <input id="filtro-q" type="search" name="q" value="{{ query }}" placeholder="Articolo, lotto, causale, note o operatore">
+        </div>
+        <div>
+            <label for="filtro-tipo">Tipo movimento</label>
+            <select id="filtro-tipo" name="tipo">
+                <option value="">Tutti</option>
+                {% for valore, etichetta in tipi_movimento %}<option value="{{ valore }}"{% if tipo_selezionato == valore %} selected{% endif %}>{{ etichetta }}</option>{% endfor %}
+            </select>
+        </div>
+        <div>
+            <label for="filtro-ubicazione">Ubicazione</label>
+            <select id="filtro-ubicazione" name="ubicazione">
+                <option value="">Tutte</option>
+                {% for ubicazione in ubicazioni %}<option value="{{ ubicazione.pk }}"{% if ubicazione_selezionata == ubicazione.pk|stringformat:"s" %} selected{% endif %}>{{ ubicazione.nome }}</option>{% endfor %}
+            </select>
+        </div>
+        <div><label for="filtro-da">Dal</label><input id="filtro-da" type="date" name="data_da" value="{{ data_da }}"></div>
+        <div><label for="filtro-a">Al</label><input id="filtro-a" type="date" name="data_a" value="{{ data_a }}"></div>
+    </div>
+    <div class="form-actions">
+        <button type="submit" class="btn">Filtra</button>
+        <a href="{% url 'elenco_movimenti' %}" class="btn btn-secondary">Azzera filtri</a>
+    </div>
+</form>
+
 <div class="table-container">
 
-    {% if movimenti %}
+    {% if movimenti.object_list %}
 
         <table>
 
@@ -105,7 +143,7 @@ Movimenti di magazzino - MIRA
 
     {% else %}
 
-        <p>Non sono presenti movimenti di magazzino.</p>
+        <p>Nessun movimento corrisponde ai filtri impostati.</p>
 
     {% endif %}
 

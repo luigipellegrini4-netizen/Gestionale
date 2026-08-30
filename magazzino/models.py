@@ -13,6 +13,7 @@ class Articolo(models.Model):
         SEMILAVORATO = "SEMILAVORATO", "Semilavorato"
         PACKAGING = "PACKAGING", "Packaging"
         CONSUMABILI = "CONSUMABILI", "Consumabili"
+        RICAMBI = "RICAMBI", "Ricambi"
         PRODOTTO_FINITO = "PRODOTTO_FINITO", "Prodotto finito"
 
     class UnitaMisura(models.TextChoices):
@@ -25,12 +26,6 @@ class Articolo(models.Model):
         SCATOLA = "SCATOLA", "Scatola"
         COFANETTO = "COFANETTO", "Cofanetto"
         ALTRO = "ALTRO", "Altro"
-
-    class UnitaFormato(models.TextChoices):
-        G = "G", "g"
-        KG = "KG", "kg"
-        ML = "ML", "ml"
-        L = "L", "l"
 
     tipo_packaging = models.CharField(
         max_length=20,
@@ -63,35 +58,10 @@ class Articolo(models.Model):
         choices=UnitaMisura.choices,
     )
 
-    quantita_per_confezione = models.DecimalField(
-        max_digits=12,
-        decimal_places=3,
-        null=True,
-        blank=True,
-    )
-
-    formato = models.DecimalField(
-        max_digits=12,
-        decimal_places=3,
-        null=True,
-        blank=True,
-    )
-
-    unita_formato = models.CharField(
-        max_length=2,
-        choices=UnitaFormato.choices,
-        blank=True,
-    )
-
     scorta_minima = models.DecimalField(
         max_digits=12,
         decimal_places=3,
         default=0,
-    )
-
-    pezzi_per_imballo = models.PositiveIntegerField(
-        null=True,
-        blank=True,
     )
 
     attivo = models.BooleanField(
@@ -113,24 +83,6 @@ class Articolo(models.Model):
                 condition=models.Q(scorta_minima__gte=0),
                 name="articolo_scorta_minima_non_negativa",
             ),
-            models.CheckConstraint(
-                condition=(
-                    models.Q(quantita_per_confezione__isnull=True)
-                    | models.Q(quantita_per_confezione__gt=0)
-                ),
-                name="articolo_quantita_confezione_positiva",
-            ),
-            models.CheckConstraint(
-                condition=models.Q(formato__isnull=True) | models.Q(formato__gt=0),
-                name="articolo_formato_positivo",
-            ),
-            models.CheckConstraint(
-                condition=(
-                    models.Q(formato__isnull=True, unita_formato="")
-                    | models.Q(formato__isnull=False) & ~models.Q(unita_formato="")
-                ),
-                name="articolo_formato_unita_coerenti",
-            ),
         ]
 
     def __str__(self):
@@ -139,17 +91,6 @@ class Articolo(models.Model):
     @property
     def nome_per_produzione(self):
         return self.nome_produzione or self.descrizione
-
-    @property
-    def formato_kg(self):
-        if self.formato is None:
-            return None
-        if self.unita_formato == self.UnitaFormato.G:
-            return self.formato / 1000
-        if self.unita_formato == self.UnitaFormato.KG:
-            return self.formato
-        return None
-
 
 class Fornitore(models.Model):
 
@@ -214,30 +155,12 @@ class Ubicazione(models.Model):
         choices=TipoMagazzino.choices,
     )
 
-    scaffale = models.CharField(
-        max_length=30,
-        blank=True,
-    )
-
-    piano = models.CharField(
-        max_length=30,
-        blank=True,
-    )
-
     attiva = models.BooleanField(
         default=True,
     )
 
     def __str__(self):
-        posizione = self.nome
-
-        if self.scaffale:
-            posizione += f" - Scaffale {self.scaffale}"
-
-        if self.piano:
-            posizione += f" - Piano {self.piano}"
-
-        return posizione
+        return self.nome
 
 class Lotto(models.Model):
 
@@ -322,6 +245,12 @@ class Lotto(models.Model):
         blank=True,
     )
 
+    capacita_imballo = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text="Numero di prodotti contenuti nella singola scatola o cofanetto.",
+    )
+
     note = models.TextField(
         blank=True,
     )
@@ -379,6 +308,13 @@ class Lotto(models.Model):
                     | models.Q(peso_unita_acquisto__gt=0)
                 ),
                 name="lotto_peso_uda_positivo",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(capacita_imballo__isnull=True)
+                    | models.Q(capacita_imballo__gt=0)
+                ),
+                name="lotto_capacita_imballo_positiva",
             ),
         ]
 
@@ -514,6 +450,10 @@ class Movimento(models.Model):
 
 
 class NonConformitaLotto(models.Model):
+    class UnitaQuarantena(models.TextChoices):
+        UDA = "UDA", "UDA"
+        KG = "KG", "kg"
+
     class Stato(models.TextChoices):
         APERTA = "APERTA", "Aperta"
         IN_LAVORAZIONE = "IN_LAVORAZIONE", "In lavorazione"
@@ -589,6 +529,9 @@ class NonConformitaLotto(models.Model):
     numero_uda_quarantena = models.PositiveIntegerField(null=True, blank=True)
     quantita_quarantena = models.DecimalField(max_digits=12, decimal_places=6, null=True, blank=True)
     quantita_per_uda = models.DecimalField(max_digits=12, decimal_places=6, null=True, blank=True)
+    unita_quarantena = models.CharField(
+        max_length=5, choices=UnitaQuarantena.choices, blank=True,
+    )
     motivo = models.TextField()
     note_apertura = models.TextField(blank=True)
     aperta_da = models.ForeignKey(
@@ -599,6 +542,8 @@ class NonConformitaLotto(models.Model):
     data_apertura = models.DateTimeField(auto_now_add=True)
     numero_uda_scartate = models.PositiveIntegerField(null=True, blank=True)
     numero_uda_reintegrate = models.PositiveIntegerField(null=True, blank=True)
+    quantita_scartata = models.DecimalField(max_digits=12, decimal_places=6, null=True, blank=True)
+    quantita_reintegrata = models.DecimalField(max_digits=12, decimal_places=6, null=True, blank=True)
     decisione = models.TextField(blank=True)
     gestita_da = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -746,7 +691,7 @@ class Produzione(models.Model):
 
     class Fase(models.TextChoices):
         PREPARAZIONE = "PREPARAZIONE", "Preparazione"
-        ROBOQUBO = "ROBOQUBO", "RoboQubo"
+        ROBOQUBO = "ROBOQUBO", "RoboQbo"
         INVASETTAMENTO = "INVASETTAMENTO", "Invasettamento"
         COMPLETATA = "COMPLETATA", "Completata"
 
@@ -885,7 +830,7 @@ class Produzione(models.Model):
 
     class Meta:
         permissions = [
-            ("operare_roboqubo", "Può registrare i cicli RoboQubo"),
+            ("operare_roboqubo", "Può registrare i cicli RoboQbo"),
             ("operare_invasettamento", "Può registrare l'invasettamento"),
             ("gestire_produzioni", "Può verificare e correggere le produzioni"),
         ]

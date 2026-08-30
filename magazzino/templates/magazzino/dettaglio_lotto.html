@@ -115,6 +115,13 @@
             {{ lotto.unita_acquisto_per_collo|default:"—" }}
         </div>
 
+        {% if lotto.capacita_imballo %}
+        <div>
+            <strong>Capacità del singolo imballo</strong>
+            {{ lotto.capacita_imballo }} prodotti
+        </div>
+        {% endif %}
+
         <div>
             <strong>Unità di acquisto totali</strong>
             {{ lotto.numero_unita_acquisto_totali|default:"—" }}

@@ -73,6 +73,11 @@ urlpatterns = [
         views.consumo,
         name="consumo",
     ),
+    path(
+        "rettifica-inventario/",
+        views.rettifica_inventario,
+        name="rettifica_inventario",
+    ),
 
     path(
         "movimenti/",

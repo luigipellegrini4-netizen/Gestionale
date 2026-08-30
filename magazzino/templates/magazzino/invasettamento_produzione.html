@@ -1,20 +1,105 @@
 {% extends "magazzino/base.html" %}
 {% block title %}Invasettamento {{ produzione.articolo.codice }} - MIRA{% endblock %}
 {% block content %}
+<style>
+    .invasettamento-page { --inv-blue:#175cd3; --inv-green:#067647; --inv-amber:#b54708; --inv-border:#d0d5dd; }
+    .invasettamento-page .page-header { margin-bottom: 1rem; }
+    .inv-status-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:.75rem; margin:1rem 0; }
+    .inv-status { padding:1rem; border:1px solid var(--inv-border); border-radius:12px; background:#fff; box-shadow:0 1px 2px rgba(16,24,40,.05); }
+    .inv-status span { display:block; color:#667085; font-size:.82rem; text-transform:uppercase; letter-spacing:.04em; margin-bottom:.25rem; }
+    .inv-status strong { display:block; font-size:1.05rem; }
+    .inv-next { display:flex; gap:.8rem; align-items:flex-start; padding:1rem 1.1rem; margin-bottom:1rem; border-radius:10px; border-left:5px solid var(--inv-blue); background:#eff8ff; }
+    .inv-next-icon { display:grid; place-items:center; min-width:30px; height:30px; border-radius:50%; background:var(--inv-blue); color:#fff; font-weight:800; }
+    .inv-next p { margin:.15rem 0 0; }
+    .invasettamento-page > .card { border:1px solid var(--inv-border); border-radius:12px; box-shadow:0 1px 3px rgba(16,24,40,.08); margin-bottom:1rem; }
+    .invasettamento-page > .card > h3:first-child { margin-top:0; padding-bottom:.7rem; border-bottom:1px solid #eaecf0; }
+    .invasettamento-page [id^="carrello-"] { border-left:5px solid var(--inv-amber); }
+    .invasettamento-page [id^="carrello-"] h4 { margin:1rem 0 .45rem; color:#344054; }
+    .invasettamento-page [id^="carrello-"] fieldset { border:1px solid var(--inv-border); border-radius:9px; padding:.85rem; display:flex; flex-wrap:wrap; gap:.75rem 1.25rem; }
+    .invasettamento-page [id^="carrello-"] fieldset label { display:flex; align-items:center; gap:.35rem; margin:0; }
+    .invasettamento-page textarea, .invasettamento-page input:not([type="hidden"]):not([type="radio"]), .invasettamento-page select { max-width:100%; box-sizing:border-box; }
+    #moca { border-left:5px solid var(--inv-green); }
+    #nuovo-carrello { border-left:5px solid var(--inv-blue); }
+    #scelta-dopo-carrello { border:2px solid var(--inv-blue); background:#eff8ff; }
+    .inv-choice-actions { display:flex; flex-wrap:wrap; gap:.75rem; margin-top:1rem; }
+    #scelta-finale, #chiusura-senza-tank { border:2px solid var(--inv-green); background:#f6fef9; }
+    #form-conferma-produzione > p { display:grid; grid-template-columns:minmax(210px,1fr) minmax(220px,2fr); gap:.75rem; align-items:center; }
+    #form-conferma-produzione > p label { font-weight:650; }
+    .inv-complete { color:var(--inv-green); font-weight:700; }
+    @media (max-width:900px) { .inv-status-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+    @media (max-width:600px) { .inv-status-grid { grid-template-columns:1fr; } #form-conferma-produzione > p { grid-template-columns:1fr; gap:.25rem; } .inv-next { align-items:flex-start; } }
+</style>
+<div class="invasettamento-page">
 {% if produzione.invasettamento_congelato %}<div class="message warning"><strong>Produzione congelata per NC.</strong> Puoi completare l’invasettamento dei tank disponibili e chiuderlo con un lotto definitivo. Nella lavorazione temporanea resteranno soltanto i batch non ancora lavorati, in attesa della decisione del Responsabile Qualità.</div>{% endif %}
 {% if lotti_uscita %}<div class="card" id="lotti-definitivi"><h3>Lotti definitivi già ottenuti</h3><table><thead><tr><th>Lotto</th><th>Vasetti buoni</th><th>Scarti</th><th>Peso netto</th><th>Quantità teorica</th><th>Quantità ottenuta</th><th>Resa</th></tr></thead><tbody>{% for uscita in lotti_uscita %}<tr><td><a href="{% url 'dettaglio_lotto' uscita.lotto.pk %}">{{ uscita.lotto.codice_lotto }}</a></td><td>{{ uscita.numero_vasetti_buoni }}</td><td>{{ uscita.numero_vasetti_scartati }}</td><td>{{ uscita.peso_netto_vasetto_g }} g</td><td>{{ uscita.quantita_teorica_kg|default:"—" }} kg</td><td>{{ uscita.quantita_ottenuta_kg }} kg</td><td>{{ uscita.resa_percentuale|default:"—" }}%</td></tr>{% endfor %}</tbody></table></div>{% endif %}
 <div class="page-header"><div><h2>Invasettamento</h2><p>{{ produzione.articolo.nome_per_produzione }} · Lotto temporaneo {{ produzione.lotto_provvisorio }}</p></div></div>
 
-<div class="card"><h3>Collegamento con RoboQubo</h3><p>Questo invasettamento appartiene alla stessa produzione RoboQubo <strong>{{ produzione.lotto_provvisorio }}</strong>. Stato RoboQubo: <strong>{{ produzione.get_stato_roboqubo_display }}</strong>. Stato invasettamento: <strong>{{ produzione.get_stato_invasettamento_display }}</strong>.</p><p><strong>{{ tank_pronti }}</strong> tank controllati disponibili. I carrelli restano indipendenti dai singoli tank, ma possono essere registrati soltanto se RoboQubo ha reso disponibile almeno un tank.</p>{% if tank_disponibili %}<div class="table-container"><table><thead><tr><th>Tank proveniente da RoboQubo</th><th>Batch contenuti</th><th>°Brix</th><th>pH</th><th>Controllato il</th></tr></thead><tbody>{% for t in tank_disponibili %}<tr><td>Tank {{ t.numero }}</td><td>{% for b in t.batch.all %}{{ b.numero }}{% if not forloop.last %}, {% endif %}{% empty %}—{% endfor %}</td><td>{{ t.gradi_brix }}</td><td>{{ t.ph }}</td><td>{{ t.data_ora_controlli|date:"d/m/Y H:i" }}</td></tr>{% endfor %}</tbody></table></div>{% else %}<div class="message warning">RoboQubo non ha ancora reso disponibile alcun tank controllato.</div>{% endif %}</div>
+<div class="inv-status-grid" aria-label="Stato invasettamento">
+    <div class="inv-status"><span>RoboQbo</span><strong>{{ produzione.get_stato_roboqubo_display }}</strong></div>
+    <div class="inv-status"><span>Tank disponibili</span><strong>{{ tank_pronti }}</strong></div>
+    <div class="inv-status"><span>Imballaggi MOCA</span><strong>{% if produzione.moca_igienizzati %}<span class="inv-complete">✓ Confermati</span>{% else %}Da confermare{% endif %}</strong></div>
+    <div class="inv-status"><span>Invasettamento</span><strong>{{ produzione.get_stato_invasettamento_display }}</strong></div>
+</div>
+
+{% if produzione.stato == "CONFERMATA" %}
+<div class="inv-next"><span class="inv-next-icon">✓</span><div><strong>Lavorazione completata</strong><p>La produzione è stata chiusa e il lotto definitivo è stato registrato.</p></div></div>
+{% elif not produzione.moca_igienizzati %}
+<div class="inv-next"><span class="inv-next-icon">1</span><div><strong>Prossimo passo: conferma gli imballaggi MOCA</strong><p>Verifica che vasetti e capsule siano puliti e igienizzati.</p></div></div>
+{% elif carrelli_aperti %}
+<div class="inv-next"><span class="inv-next-icon">→</span><div><strong>Prossimo passo: completa i carrelli aperti</strong><p>Registra shock termico e presenza vuoto per ogni carrello ancora in lavorazione.</p></div></div>
+{% elif tank_pronti %}
+<div class="inv-next"><span class="inv-next-icon">→</span><div><strong>Prossimo passo</strong><p>Puoi registrare un nuovo carrello oppure, se hai terminato, chiudere invasettamento e produzione.</p></div></div>
+{% else %}
+<div class="inv-next"><span class="inv-next-icon">…</span><div><strong>In attesa di RoboQbo</strong><p>Non risultano ancora tank controllati disponibili.</p></div></div>
+{% endif %}
+
+<div class="card"><h3>Collegamento con RoboQbo</h3><p>Questo invasettamento appartiene alla stessa produzione RoboQbo <strong>{{ produzione.lotto_provvisorio }}</strong>. Stato RoboQbo: <strong>{{ produzione.get_stato_roboqubo_display }}</strong>. Stato invasettamento: <strong>{{ produzione.get_stato_invasettamento_display }}</strong>.</p><p><strong>{{ tank_pronti }}</strong> tank controllati disponibili. I carrelli restano indipendenti dai singoli tank, ma possono essere registrati soltanto se RoboQbo ha reso disponibile almeno un tank.</p>{% if tank_disponibili %}<div class="table-container"><table><thead><tr><th>Tank proveniente da RoboQbo</th><th>Batch contenuti</th><th>°Brix</th><th>pH</th><th>Controllato il</th></tr></thead><tbody>{% for t in tank_disponibili %}<tr><td>Tank {{ t.numero }}</td><td>{% for b in t.batch.all %}{{ b.numero }}{% if not forloop.last %}, {% endif %}{% empty %}—{% endfor %}</td><td>{{ t.gradi_brix }}</td><td>{{ t.ph }}</td><td>{{ t.data_ora_controlli|date:"d/m/Y H:i" }}</td></tr>{% endfor %}</tbody></table></div>{% else %}<div class="message warning">RoboQbo non ha ancora reso disponibile alcun tank controllato.</div>{% endif %}</div>
 
 <div class="card" id="moca"><h3>1. Imballaggi MOCA</h3>{% if produzione.moca_igienizzati %}<p>✓ Vasetti e capsule puliti e igienizzati il {{ produzione.moca_igienizzati_il|date:"d/m/Y H:i" }}{% if produzione.moca_igienizzati_da %} da {{ produzione.moca_igienizzati_da.username }}{% endif %}.</p>{% else %}<form method="post">{% csrf_token %}<input type="hidden" name="azione" value="conferma_moca"><button class="btn">Conferma vasetti e capsule puliti e igienizzati</button></form>{% endif %}</div>
 
 {% for c in carrelli %}<div class="card" id="carrello-{{ c.pk }}"><h3>Carrello {{ c.numero }}</h3><h4>1. Seconda pastorizzazione</h4><p>71 °C × 4 minuti: <strong>{{ c.get_esito_pastorizzazione_display }}</strong> · registrata il {{ c.pastorizzazione_registrata_il|date:"d/m/Y H:i" }}{% if c.note_pastorizzazione %}<br>Note: {{ c.note_pastorizzazione }}{% endif %}</p>{% if c.chiuso_il %}<h4>2. Shock termico e presenza vuoto</h4><p>Esito: <strong>{{ c.get_esito_shock_vuoto_display }}</strong> · registrato il {{ c.shock_vuoto_registrato_il|date:"d/m/Y H:i" }}{% if c.note_shock_vuoto %}<br>Note: {{ c.note_shock_vuoto }}{% endif %}</p>{% else %}<h4>2. Shock termico e presenza vuoto</h4><p>Questo carrello può completare shock/vuoto mentre un altro viene pastorizzato.</p><form method="post">{% csrf_token %}<input type="hidden" name="azione" value="chiudi_carrello"><input type="hidden" name="carrello_id" value="{{ c.pk }}"><fieldset><legend>Shock termico e presenza vuoto</legend><label for="shock-{{ c.pk }}-c"><input id="shock-{{ c.pk }}-c" type="radio" name="esito_shock_vuoto" value="C" required> C - Conforme</label> <label for="shock-{{ c.pk }}-nc"><input id="shock-{{ c.pk }}-nc" type="radio" name="esito_shock_vuoto" value="NC"> NC - Non conforme</label> <label for="shock-{{ c.pk }}-na"><input id="shock-{{ c.pk }}-na" type="radio" name="esito_shock_vuoto" value="NA"> NA - Non applicabile</label></fieldset><p><label for="note-shock-{{ c.pk }}">Note shock termico / vuoto</label><textarea id="note-shock-{{ c.pk }}" name="note_shock_vuoto" rows="2"></textarea></p><button class="btn">Registra shock/vuoto e chiudi carrello</button></form>{% endif %}</div>{% endfor %}
 
+{% if produzione.stato == "BOZZA" and carrelli and not carrelli_aperti and produzione.moca_igienizzati and tank_pronti and not carrello_form.errors and not conferma_form.errors %}
+<div class="card" id="scelta-dopo-carrello">
+    <h3>Carrello completato</h3>
+    <p><strong>Devi registrare un nuovo carrello?</strong></p>
+    <div class="inv-choice-actions">
+        <button type="button" class="btn" id="continua-carrelli">Sì, registra un nuovo carrello</button>
+        <button type="button" class="btn btn-secondary" id="termina-carrelli">No, termina i carrelli</button>
+    </div>
+</div>
+{% endif %}
+
 <div class="card" id="nuovo-carrello"><h3>Nuovo carrello</h3>{% if produzione.stato == "CONFERMATA" %}<p>La lavorazione è conclusa.</p>{% elif not produzione.moca_igienizzati %}<p>Prima conferma la pulizia e l’igienizzazione degli imballaggi MOCA.</p>{% elif not tank_pronti %}<p>Nessun tank controllato è ancora disponibile.</p>{% else %}<p>Il carrello è indipendente dai tank e dagli altri carrelli.</p><form method="post">{% csrf_token %}<input type="hidden" name="azione" value="apri_carrello">{{ carrello_form.as_p }}<button class="btn">Registra seconda pastorizzazione</button></form>{% endif %}</div>
 
 {% if produzione.stato == "BOZZA" %}<div class="card" id="scelta-finale"><h3>3. Fine dei carrelli</h3>{% if not carrelli %}<p>Registra e completa almeno un carrello.</p>{% elif carrelli_aperti %}<p>Completa tutti i carrelli aperti. Al termine potrai scegliere se registrarne altri o chiudere la produzione.</p>{% else %}<p><strong>Hai terminato i carrelli?</strong> Se devi continuare usa “Nuovo carrello”; altrimenti compila i dati finali e chiudi la produzione.</p><form method="post" id="form-conferma-produzione">{% csrf_token %}<input type="hidden" name="azione" value="conferma_produzione">{{ conferma_form.lotto_proposto_originale }}{{ conferma_form.non_field_errors }}<p>{{ conferma_form.lotto_definitivo.label_tag }} {{ conferma_form.lotto_definitivo }} {{ conferma_form.lotto_definitivo.errors }}</p><p>{{ conferma_form.quantita_prodotta.label_tag }} {{ conferma_form.quantita_prodotta }} {{ conferma_form.quantita_prodotta.errors }}</p><p>{{ conferma_form.pezzi_difettosi_finali.label_tag }} {{ conferma_form.pezzi_difettosi_finali }} {{ conferma_form.pezzi_difettosi_finali.errors }}</p><p>{{ conferma_form.capsule_difettose_finali.label_tag }} {{ conferma_form.capsule_difettose_finali }} {{ conferma_form.capsule_difettose_finali.errors }}</p><p>{{ conferma_form.peso_netto_vasetto_g.label_tag }} {{ conferma_form.peso_netto_vasetto_g }} {{ conferma_form.peso_netto_vasetto_g.errors }}</p><div class="detail-grid"><div><strong>Quantità teorica</strong><br><span id="quantita-teorica">{{ quantita_teorica_kg }}</span> kg</div><div><strong>Quantità effettiva ottenuta</strong><br><span id="quantita-ottenuta-calcolata">—</span> kg</div><div><strong>Resa</strong><br><span id="resa-calcolata">—</span>%</div></div><p>{{ conferma_form.note.label_tag }} {{ conferma_form.note }} {{ conferma_form.note.errors }}</p><button class="btn">Chiudi invasettamento e produzione</button></form>{% endif %}</div>{% elif produzione.stato == "CONFERMATA" %}<div class="card"><h3>Lavorazione conclusa</h3><p>Lotto {{ produzione.lotto.codice_lotto }} · {{ produzione.quantita_prodotta }} vasetti buoni · {{ produzione.quantita_ottenuta_kg }} kg effettivi · resa {{ produzione.resa_percentuale }}%.</p></div>{% endif %}
 
-{% if produzione.stato == "BOZZA" and not tank_pronti and produzione.stato_roboqubo == "CONCLUSA" and lotti_uscita and not carrelli %}<div class="card" id="chiusura-senza-tank"><h3>Conclusione invasettamento</h3><p>Tutti i tank risultano già invasettati e RoboQubo è concluso. Puoi concludere la fase senza creare un altro lotto.</p><form method="post">{% csrf_token %}<input type="hidden" name="azione" value="concludi_senza_tank"><button class="btn">Concludi invasettamento e produzione</button></form></div>{% endif %}
+{% if produzione.stato == "BOZZA" and not tank_pronti and produzione.stato_roboqubo == "CONCLUSA" and lotti_uscita and not carrelli %}<div class="card" id="chiusura-senza-tank"><h3>Conclusione invasettamento</h3><p>Tutti i tank risultano già invasettati e RoboQbo è concluso. Puoi concludere la fase senza creare un altro lotto.</p><form method="post">{% csrf_token %}<input type="hidden" name="azione" value="concludi_senza_tank"><button class="btn">Concludi invasettamento e produzione</button></form></div>{% endif %}
+</div>
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+    const scelta = document.getElementById("scelta-dopo-carrello");
+    if (!scelta) return;
+    const nuovo = document.getElementById("nuovo-carrello");
+    const finale = document.getElementById("scelta-finale");
+    if (nuovo) nuovo.hidden = true;
+    if (finale) finale.hidden = true;
+
+    document.getElementById("continua-carrelli").addEventListener("click", function () {
+        scelta.hidden = true;
+        if (nuovo) {
+            nuovo.hidden = false;
+            nuovo.scrollIntoView({behavior: "smooth", block: "start"});
+        }
+    });
+    document.getElementById("termina-carrelli").addEventListener("click", function () {
+        scelta.hidden = true;
+        if (finale) {
+            finale.hidden = false;
+            finale.scrollIntoView({behavior: "smooth", block: "start"});
+        }
+    });
+});
+</script>
 <script>document.addEventListener("DOMContentLoaded",function(){if(document.getElementById("chiusura-senza-tank")){const scelta=document.getElementById("scelta-finale");if(scelta)scelta.style.display="none";}const buoni=document.getElementById("id_quantita_prodotta"),scarti=document.getElementById("id_pezzi_difettosi_finali"),peso=document.getElementById("id_peso_netto_vasetto_g"),eff=document.getElementById("quantita-ottenuta-calcolata"),resa=document.getElementById("resa-calcolata"),teorico=parseFloat((document.getElementById("quantita-teorica")?.textContent||"").replace(",","."));function aggiorna(){if(!eff)return;const b=parseFloat((buoni?.value||"").replace(",",".")),s=parseFloat((scarti?.value||"").replace(",",".")),p=parseFloat((peso?.value||"").replace(",","."));if(Number.isFinite(b)&&Number.isFinite(s)&&Number.isFinite(p)){const valore=(b+s)*p/1000;eff.textContent=valore.toFixed(3);resa.textContent=Number.isFinite(teorico)&&teorico>0?(valore/teorico*100).toFixed(2):"—";}else{eff.textContent="—";resa.textContent="—";}}[buoni,scarti,peso].forEach(e=>e&&e.addEventListener("input",aggiorna));aggiorna();});</script>
 {% endblock %}

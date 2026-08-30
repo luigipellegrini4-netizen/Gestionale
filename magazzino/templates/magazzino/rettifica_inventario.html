@@ -1,77 +1,62 @@
 {% extends "magazzino/base.html" %}
 
-{% block title %}
-Scarico materiale - MIRA
-{% endblock %}
+{% block title %}Rettifica inventario - MIRA{% endblock %}
 
 {% block content %}
-
 <div class="page-header">
     <div>
-        <h2>Scarico materiale di consumo</h2>
+        <h2>Rettifica inventario</h2>
         <p>
-            Registra lo scarico di guanti, carta, detergenti e altri materiali
-            consumati che non entrano direttamente nel prodotto.
+            Registra la quantità realmente rilevata. MIRA calcolerà la differenza
+            rispetto alla giacenza teorica e conserverà la rettifica nel registro movimenti.
         </p>
     </div>
 </div>
 
 <div class="form-card">
-
     {% if form.non_field_errors %}
         {% for error in form.non_field_errors %}
-            <div class="message error">
-                {{ error }}
-            </div>
+            <div class="message error">{{ error }}</div>
         {% endfor %}
     {% endif %}
 
-    <form method="post" id="consumo-form">
+    <form method="post">
         {% csrf_token %}
-
         {{ form.as_p }}
 
         <div class="form-actions">
-
-            <button type="submit" class="btn">
-                Registra scarico
-            </button>
-
+            <button type="submit" class="btn">Registra rettifica</button>
             <a href="{% url 'situazione_magazzino' %}" class="btn btn-secondary">
                 Situazione magazzino
             </a>
-
         </div>
-
     </form>
-
 </div>
 
 <script>
 document.addEventListener("DOMContentLoaded", function () {
     const ricerca = document.getElementById("id_ricerca_lotto");
-    const lotto = document.getElementById("id_lotto");
-    const opzioni = Array.from(lotto.options).map(option => ({
+    const giacenza = document.getElementById("id_giacenza");
+    const opzioni = Array.from(giacenza.options).map(option => ({
         value: option.value,
         text: option.textContent,
         selected: option.selected,
     }));
 
-    function filtraLotti() {
+    function filtraGiacenze() {
         const termine = ricerca.value.trim().toLocaleLowerCase("it");
-        const valore = lotto.value;
-        lotto.replaceChildren();
+        const valore = giacenza.value;
+        giacenza.replaceChildren();
         for (const dato of opzioni) {
             if (dato.value && termine && !dato.text.toLocaleLowerCase("it").includes(termine)) continue;
             const option = new Option(dato.text, dato.value);
             option.selected = dato.value === valore || (!valore && dato.selected);
-            lotto.add(option);
+            giacenza.add(option);
         }
-        if (valore && lotto.value !== valore) lotto.value = "";
+        if (valore && giacenza.value !== valore) giacenza.value = "";
     }
 
-    ricerca.addEventListener("input", filtraLotti);
+    ricerca.addEventListener("input", filtraGiacenze);
 });
 </script>
-
 {% endblock %}

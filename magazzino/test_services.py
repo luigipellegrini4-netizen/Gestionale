@@ -9,6 +9,7 @@ from django.utils import timezone
 
 from .models import (
     Articolo,
+    BatchProduzione,
     CarrelloProduzione,
     Confezionamento,
     Giacenza,
@@ -34,6 +35,7 @@ from .services import (
     registra_carico_lotto,
     registra_confezionamento,
     registra_consumo,
+    registra_rettifica_inventario,
     registra_inscatolamento,
     registra_ingredienti_tank,
     registra_prelievi_produzione,
@@ -101,6 +103,44 @@ class OperazioniMagazzinoTests(TestCase):
         self.assertEqual(movimento.tipo, Movimento.Tipo.CARICO)
         self.assertEqual(movimento.quantita, Decimal("2.5"))
         self.assertEqual(movimento.eseguito_da, self.operatore)
+
+    def test_prelievo_manuale_usa_solo_la_giacenza_selezionata(self):
+        Ubicazione.objects.create(
+            nome="Magazzino produzione manuale",
+            tipo_magazzino=Ubicazione.TipoMagazzino.PRODUZIONE,
+        )
+        altro_lotto = Lotto.objects.create(
+            articolo=self.articolo, codice_lotto="LOT-MANUALE",
+            tipo=Lotto.Tipo.ACQUISTO, quantita_iniziale=Decimal("10"),
+            peso_unita_acquisto=Decimal("2"),
+        )
+        altra_giacenza = Giacenza.objects.create(
+            lotto=altro_lotto, ubicazione=self.destinazione, quantita=Decimal("10"),
+        )
+        prodotto = Articolo.objects.create(
+            codice="PF-MANUALE", descrizione="Prodotto prelievo manuale",
+            categoria=Articolo.Categoria.PRODOTTO_FINITO,
+            unita_misura=Articolo.UnitaMisura.KG,
+        )
+        ricetta = Ricetta.objects.create(articolo=prodotto, nome="Manuale", attiva=True)
+        RigaRicetta.objects.create(
+            ricetta=ricetta, articolo=self.articolo,
+            quantita=Decimal("2"), ingrediente_prodotto=True,
+        )
+        produzione = Produzione.objects.create(
+            articolo=prodotto, data_produzione=date.today(), numero_batch_previsti=1,
+        )
+
+        prelievi = registra_prelievi_produzione(
+            produzione, self.articolo, Decimal("3"), operatore=self.operatore,
+            giacenze_ids=[altra_giacenza.pk],
+        )
+
+        self.giacenza.refresh_from_db()
+        altra_giacenza.refresh_from_db()
+        self.assertEqual(self.giacenza.quantita, Decimal("10"))
+        self.assertEqual(altra_giacenza.quantita, Decimal("6"))
+        self.assertEqual(prelievi[0].lotto, altro_lotto)
 
     def test_non_conformita_parziale_quarantena_e_reintegro(self):
         non_conformita = apri_non_conformita_lotto(
@@ -351,6 +391,48 @@ class OperazioniMagazzinoTests(TestCase):
         self.assertEqual(self.giacenza.quantita, Decimal("10"))
         self.assertFalse(Movimento.objects.exists())
 
+    def test_rettifica_in_diminuzione_aggiorna_giacenza_e_registra_uscita(self):
+        movimento = registra_rettifica_inventario(
+            giacenza=self.giacenza,
+            quantita_reale=Decimal("8.5"),
+            motivo="Conteggio inventariale",
+            note="Verifica fisica",
+            operatore=self.operatore,
+        )
+
+        self.giacenza.refresh_from_db()
+        self.assertEqual(self.giacenza.quantita, Decimal("8.5"))
+        self.assertEqual(movimento.tipo, Movimento.Tipo.RETTIFICA)
+        self.assertEqual(movimento.quantita, Decimal("1.5"))
+        self.assertEqual(movimento.ubicazione_origine, self.origine)
+        self.assertIsNone(movimento.ubicazione_destinazione)
+        self.assertIn("teorico 10", movimento.note)
+        self.assertEqual(movimento.eseguito_da, self.operatore)
+
+    def test_rettifica_in_aumento_aggiorna_giacenza_e_registra_entrata(self):
+        movimento = registra_rettifica_inventario(
+            giacenza=self.giacenza,
+            quantita_reale=Decimal("12"),
+            motivo="Conteggio inventariale",
+            operatore=self.operatore,
+        )
+
+        self.giacenza.refresh_from_db()
+        self.assertEqual(self.giacenza.quantita, Decimal("12"))
+        self.assertEqual(movimento.quantita, Decimal("2"))
+        self.assertIsNone(movimento.ubicazione_origine)
+        self.assertEqual(movimento.ubicazione_destinazione, self.origine)
+
+    def test_rettifica_identica_non_crea_movimento(self):
+        with self.assertRaisesMessage(ValueError, "non è necessaria"):
+            registra_rettifica_inventario(
+                giacenza=self.giacenza,
+                quantita_reale=Decimal("10"),
+                motivo="Conteggio inventariale",
+            )
+
+        self.assertFalse(Movimento.objects.exists())
+
 
 class VincoliQuantitaTests(TestCase):
     @classmethod
@@ -496,6 +578,17 @@ class EliminazioneProduzioniBozzaTests(TestCase):
 
         self.assertTrue(Produzione.objects.filter(pk=produzione.pk).exists())
 
+    def test_produzione_con_batch_non_puo_essere_annullata(self):
+        produzione = Produzione.objects.create(
+            articolo=self.prodotto, data_produzione=date.today(),
+        )
+        BatchProduzione.objects.create(produzione=produzione, numero=1)
+
+        with self.assertRaisesMessage(ValueError, "almeno un batch"):
+            elimina_produzione_bozza(produzione)
+
+        self.assertTrue(Produzione.objects.filter(pk=produzione.pk).exists())
+
 
 class ConfermaProduzioneTests(TestCase):
     @classmethod
@@ -518,11 +611,9 @@ class ConfermaProduzioneTests(TestCase):
         )
         cls.vasetto = Articolo.objects.create(
             codice="VASO-TEST",
-            descrizione="Vasetto test",
+            descrizione="Vasetto 250 g test",
             categoria=Articolo.Categoria.MOCA,
             unita_misura=Articolo.UnitaMisura.PZ,
-            formato=Decimal("250"),
-            unita_formato=Articolo.UnitaFormato.G,
         )
         cls.tappo = Articolo.objects.create(
             codice="TAPPO-TEST",
@@ -822,7 +913,6 @@ class ConfezionamentoInscatolamentoTests(TestCase):
             categoria=Articolo.Categoria.PACKAGING,
             unita_misura=Articolo.UnitaMisura.PZ,
             tipo_packaging=Articolo.TipoPackaging.SCATOLA,
-            pezzi_per_imballo=6,
         )
         cls.ubicazione_packaging = Ubicazione.objects.create(
             nome="Packaging test completo",
@@ -850,6 +940,7 @@ class ConfezionamentoInscatolamentoTests(TestCase):
             codice_lotto="SCA-LOT",
             tipo=Lotto.Tipo.ACQUISTO,
             quantita_iniziale=Decimal("10"),
+            capacita_imballo=6,
         )
 
     def setUp(self):
