@@ -1191,8 +1191,16 @@ class ControlloTankForm(forms.Form):
 
 
 class BatchProduzioneForm(forms.Form):
-    ora_inizio = forms.TimeField(label="Ora inizio", widget=forms.TimeInput(attrs={"type": "time"}))
-    ora_fine = forms.TimeField(label="Ora fine", widget=forms.TimeInput(attrs={"type": "time"}))
+    ora_inizio = forms.TimeField(
+        required=False, label="Ora inizio",
+        help_text="Facoltativa soltanto se il batch è non conforme.",
+        widget=forms.TimeInput(attrs={"type": "time"}),
+    )
+    ora_fine = forms.TimeField(
+        required=False, label="Ora fine",
+        help_text="Facoltativa soltanto se il batch è non conforme.",
+        widget=forms.TimeInput(attrs={"type": "time"}),
+    )
     esito_conformita = forms.ChoiceField(
         label="Tracciato di conformità 82 °C × 60 secondi",
         choices=(("C", "C - Conforme"), ("NC", "NC - Non conforme"), ("NA", "NA - Non applicabile")),
@@ -1208,7 +1216,18 @@ class BatchProduzioneForm(forms.Form):
 
     def clean(self):
         dati = super().clean()
-        if dati.get("ora_inizio") and dati.get("ora_fine") and dati["ora_fine"] < dati["ora_inizio"]:
+        esito = dati.get("esito_conformita")
+        inizio = dati.get("ora_inizio")
+        fine = dati.get("ora_fine")
+        if esito != "NC" and (inizio is None or fine is None):
+            raise forms.ValidationError(
+                "Ora di inizio e ora di fine sono obbligatorie per un batch conforme o non applicabile."
+            )
+        if esito == "NC" and ((inizio is None) != (fine is None)):
+            raise forms.ValidationError(
+                "Per un batch non conforme indica entrambi gli orari oppure lasciali entrambi vuoti."
+            )
+        if inizio and fine and fine < inizio:
             raise forms.ValidationError("L'ora di fine non può precedere l'ora di inizio.")
         if dati.get("esito_conformita") == "NC" and not dati.get("produzione_puo_proseguire"):
             self.add_error(

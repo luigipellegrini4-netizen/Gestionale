@@ -39,6 +39,15 @@ def calcola_quantita_teorica_ricetta(produzione, numero_batch=None):
     return (quantita_per_batch * Decimal(batch)).quantize(Decimal("0.001"))
 
 
+def riallinea_quantita_produzione(produzione, numero_batch=None):
+    """Mantiene coerenti batch previsti e quantità teorica della lavorazione."""
+    if numero_batch is not None:
+        produzione.numero_batch_previsti = int(numero_batch)
+    produzione.quantita_teorica_kg = calcola_quantita_teorica_ricetta(produzione)
+    produzione.save(update_fields=["numero_batch_previsti", "quantita_teorica_kg"])
+    return produzione.quantita_teorica_kg
+
+
 @transaction.atomic
 def concludi_invasettamento_senza_nuovo_lotto(produzione):
     """Conclude una fase i cui tank sono già confluiti in lotti di uscita."""
@@ -280,9 +289,20 @@ def apri_non_conformita_batch(batch, produzione_puo_proseguire, motivo, operator
             prelievo.quantita_trasferita_nc += quantita_esclusa
             prelievo.save(update_fields=["quantita_trasferita_nc"])
 
-        produzione.numero_batch_previsti -= 1
-        produzione.quantita_teorica_kg = calcola_quantita_teorica_ricetta(produzione)
-        produzione.save(update_fields=["numero_batch_previsti", "quantita_teorica_kg"])
+        riallinea_quantita_produzione(
+            produzione, numero_batch=max(produzione.numero_batch_previsti - 1, 0),
+        )
+        # La NC prosegue sulla nuova lavorazione: quella originaria e i suoi
+        # tank possono continuare e concludere l'invasettamento.
+        produzione.invasettamento_congelato = False
+        produzione.stato_invasettamento = (
+            Produzione.StatoInvasettamento.IN_CORSO
+            if produzione.moca_igienizzati or produzione.carrelli.exists()
+            else Produzione.StatoInvasettamento.NON_AVVIATO
+        )
+        produzione.save(update_fields=[
+            "invasettamento_congelato", "stato_invasettamento",
+        ])
         nc.note_apertura = (
             f"Batch in quarantena trasferito alla produzione {nuovo_temp}; "
             "la produzione originale è autorizzata a proseguire."
@@ -410,11 +430,15 @@ def apri_non_conformita_batch(batch, produzione_puo_proseguire, motivo, operator
                 note=f"Disponibile nel Magazzino produzione per {nuovo_temp}.",
             )
 
-        produzione.numero_batch_previsti = batch_precedenti
+        batch_rimasti_originale = produzione.batch.count()
+        produzione.numero_batch_previsti = batch_rimasti_originale
         produzione.quantita_teorica_kg = calcola_quantita_teorica_ricetta(produzione)
-        produzione.fase = Produzione.Fase.INVASETTAMENTO
-        produzione.stato_roboqubo = Produzione.StatoRoboqubo.CONCLUSA
-        produzione.roboqubo_chiuso_il = timezone.now()
+        # I batch sospesi vivono ora nella produzione derivata. Quelli già
+        # lavorati rimasti nell'originale devono ancora poter essere raccolti
+        # nei tank e controllati prima che l'operatore chiuda RoboQbo.
+        produzione.fase = Produzione.Fase.ROBOQUBO
+        produzione.stato_roboqubo = Produzione.StatoRoboqubo.CON_NC
+        produzione.roboqubo_chiuso_il = None
         produzione.invasettamento_congelato = False
         produzione.chiusa_per_nc = True
         produzione.save(update_fields=[
@@ -423,7 +447,8 @@ def apri_non_conformita_batch(batch, produzione_puo_proseguire, motivo, operator
         ])
         nc.note_apertura = (
             f"Batch residui trasferiti alla produzione {nuovo_temp}; materiali residui "
-            "trasferiti nel Magazzino produzione."
+            "trasferiti nel Magazzino produzione. I batch già lavorati restano "
+            "disponibili per la creazione e il controllo dei tank."
         )
         nc.save(update_fields=["note_apertura"])
     return nc
@@ -652,7 +677,12 @@ def risolvi_nc_produzione_derivata(
             )
             quantita_disponibile = sum((g.quantita for g in giacenze), Decimal("0"))
             if quantita_disponibile < materiale.quantita:
-                raise ValueError(f"Giacenza insufficiente per reintegrare {lotto.articolo.codice}.")
+                raise ValueError(
+                    f"Giacenza insufficiente per reintegrare {lotto.articolo.codice}: "
+                    f"la NC riserva {materiale.quantita}, ma nel Magazzino produzione "
+                    f"risultano disponibili {quantita_disponibile}. Controllare i "
+                    f"movimenti del lotto {lotto.codice_lotto}."
+                )
             residuo = materiale.quantita
             for giacenza in giacenze:
                 prelevata = min(giacenza.quantita, residuo)
@@ -690,7 +720,6 @@ def risolvi_nc_produzione_derivata(
             produzione.numero_batch_previsti = max(
                 produzione.numero_batch_previsti - 1, 0,
             )
-            produzione.quantita_teorica_kg = calcola_quantita_teorica_ricetta(produzione)
         if esito_batch == "REINTEGRA":
             ricetta = produzione.articolo.ricette.filter(attiva=True).first()
             if ricetta is not None:
@@ -701,6 +730,7 @@ def risolvi_nc_produzione_derivata(
         produzione.batch.filter(stato=BatchProduzione.Stato.SOSPESO).update(
             stato=BatchProduzione.Stato.DA_LAVORARE,
         )
+        produzione.quantita_teorica_kg = calcola_quantita_teorica_ricetta(produzione)
         produzione.preparazione_chiusa_il = timezone.now()
         produzione.fase = Produzione.Fase.ROBOQUBO
         produzione.stato_roboqubo = Produzione.StatoRoboqubo.NORMALE
@@ -2717,6 +2747,13 @@ def proponi_prelievi_articolo(
             quantita__gt=0,
             ubicazione__attiva=True,
         )
+        .exclude(
+            lotto__materiali_sospesi_nc__non_conformita__stato__in=[
+                NonConformitaLotto.Stato.APERTA,
+                NonConformitaLotto.Stato.IN_LAVORAZIONE,
+            ]
+        )
+        .distinct()
     )
     if giacenze_ids is not None:
         ids = {int(pk) for pk in giacenze_ids}

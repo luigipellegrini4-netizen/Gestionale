@@ -31,6 +31,9 @@ MODELLI = [
     RegistroOperazione,
 ]
 MODELLI_AMMESSI = {modello._meta.label_lower for modello in MODELLI}
+MODELLI_PER_ETICHETTA = {
+    modello._meta.label_lower: modello for modello in MODELLI
+}
 ORDINE_ELIMINAZIONE = [
     RegistroOperazione, MaterialeSospesoNonConformita,
     CarrelloProduzione, BatchProduzione, TankProduzione,
@@ -106,6 +109,8 @@ def _prepara_backup(contenuto):
     dati = documento.get("dati")
     if not isinstance(dati, list):
         raise ValueError("La sezione dati del backup non è valida.")
+    if any(not isinstance(record, dict) for record in dati):
+        raise ValueError("La sezione dati contiene record non validi.")
     if any(record.get("model") not in MODELLI_AMMESSI for record in dati):
         raise ValueError("Il backup contiene modelli non ammessi.")
 
@@ -113,6 +118,23 @@ def _prepara_backup(contenuto):
         get_user_model().objects.values_list("username", "pk")
     )
     for record in dati:
+        fields = record.get("fields")
+        if not isinstance(fields, dict):
+            raise ValueError(
+                f"Il record {record.get('model', 'sconosciuto')} non contiene campi validi."
+            )
+        modello = MODELLI_PER_ETICHETTA[record["model"]]
+        campi_correnti = {
+            campo.name
+            for campo in modello._meta.get_fields()
+            if campo.concrete and not campo.auto_created and not campo.primary_key
+        }
+        # Compatibilità in avanti: i vecchi backup possono contenere campi
+        # eliminati intenzionalmente dalle versioni successive di MIRA.
+        record["fields"] = {
+            nome: valore for nome, valore in fields.items()
+            if nome in campi_correnti
+        }
         if record["model"] == TankProduzione._meta.label_lower:
             vecchio_lotto_uscita = record["fields"].pop("lotto_uscita", None)
             record["fields"].setdefault(

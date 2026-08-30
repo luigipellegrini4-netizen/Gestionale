@@ -111,6 +111,34 @@ class BackupDatabaseTests(TestCase):
 
         self.assertTrue(Fornitore.objects.filter(codice="FOR-BACKUP").exists())
 
+    def test_ripristino_accetta_campi_rimossi_presenti_in_un_vecchio_backup(self):
+        documento = json.loads(crea_backup())
+        record_articolo = next(
+            record for record in documento["dati"]
+            if record["model"] == "magazzino.articolo"
+        )
+        record_articolo["fields"].update({
+            "formato": "250.000",
+            "unita_formato": "G",
+            "pezzi_per_imballo": 10,
+            "quantita_per_confezione": "5.000",
+        })
+        record_ubicazione = next(
+            record for record in documento["dati"]
+            if record["model"] == "magazzino.ubicazione"
+        )
+        record_ubicazione["fields"].update({
+            "scaffale": "A",
+            "piano": "2",
+        })
+
+        contenuto = json.dumps(documento).encode("utf-8")
+        with TemporaryDirectory() as cartella, override_settings(BASE_DIR=cartella):
+            ripristina_backup(contenuto)
+
+        self.assertTrue(Articolo.objects.filter(codice="ART-BACKUP").exists())
+        self.assertTrue(Ubicazione.objects.filter(nome="Ubicazione backup").exists())
+
     def test_azzeramento_web_elimina_magazzino_ma_conserva_utenti(self):
         self.client.force_login(self.utente_normale)
         response = self.client.get(reverse("azzera_database_magazzino"))

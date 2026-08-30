@@ -1821,6 +1821,17 @@ def elenco_produzioni(request, tipo="produzione"):
                     ),
                     distinct=True,
                 ),
+                batch_da_assegnare=Count(
+                    "batch",
+                    filter=Q(
+                        batch__tank__isnull=True,
+                        batch__stato__in=[
+                            BatchProduzione.Stato.CONFORME,
+                            BatchProduzione.Stato.REINTEGRATO,
+                        ],
+                    ),
+                    distinct=True,
+                ),
             )
             .prefetch_related("lotti_uscita__lotto")
             .order_by(
@@ -2096,6 +2107,28 @@ def gestione_produzione(request, pk):
     lotto_proposto = genera_codice_lotto_per_produzione(
         produzione, timezone.localdate(),
     )
+
+    # Compatibilità con NC registrate prima della correzione: la lavorazione
+    # era stata marcata conclusa anche se esistevano batch lavorati non ancora
+    # assegnati a un tank. Entrando nella scheda torna riprendibile.
+    if (
+        produzione.stato == Produzione.Stato.BOZZA
+        and produzione.chiusa_per_nc
+        and produzione.stato_roboqubo == Produzione.StatoRoboqubo.CONCLUSA
+        and produzione.batch.filter(
+            tank__isnull=True,
+            stato__in=[
+                BatchProduzione.Stato.CONFORME,
+                BatchProduzione.Stato.REINTEGRATO,
+            ],
+        ).exists()
+    ):
+        produzione.fase = Produzione.Fase.ROBOQUBO
+        produzione.stato_roboqubo = Produzione.StatoRoboqubo.CON_NC
+        produzione.roboqubo_chiuso_il = None
+        produzione.save(update_fields=[
+            "fase", "stato_roboqubo", "roboqubo_chiuso_il",
+        ])
     conferma_form = ConfermaProduzioneForm(initial={
         "lotto_definitivo": lotto_proposto,
         "lotto_proposto_originale": lotto_proposto,
@@ -2222,7 +2255,7 @@ def gestione_produzione(request, pk):
                             if puo_proseguire == "SI"
                             else "I batch non ancora lavorati vengono trasferiti su una nuova produzione "
                             "e le materie prime e i SL vengono trasferiti nel magazzino di produzione. "
-                            "La fase RoboQbo viene chiusa."
+                            "I batch già lavorati restano disponibili: assegnali ai tank e poi chiudi RoboQbo."
                         ),
                     )
                 else:
@@ -2598,6 +2631,10 @@ def gestione_produzione(request, pk):
 
 @permission_required("magazzino.operare_invasettamento", raise_exception=True)
 def elenco_invasettamenti(request):
+    produzioni_con_nc_separata = NonConformitaLotto.objects.filter(
+        produzione_id__isnull=False,
+        produzioni_bloccate__isnull=False,
+    ).values("produzione_id")
     produzioni = (
         Produzione.objects.select_related("articolo", "lotto")
         .annotate(
@@ -2621,14 +2658,22 @@ def elenco_invasettamenti(request):
         )
         .filter(
             Q(tank_disponibili__gt=0)
-            | Q(
-                stato_invasettamento__in=[
-                    Produzione.StatoInvasettamento.IN_CORSO,
-                    Produzione.StatoInvasettamento.CONGELATO,
-                ],
-            )
-            | Q(carrelli_correnti__gt=0)
-        )
+             | Q(
+                 stato_invasettamento__in=[
+                     Produzione.StatoInvasettamento.IN_CORSO,
+                     Produzione.StatoInvasettamento.CONGELATO,
+                 ],
+             )
+             # Recupera anche le lavorazioni create prima della correzione:
+             # la NC è ormai separata nella bozza derivata, quindi l'originale
+             # deve restare accessibile e sarà sbloccata entrando nella pagina.
+             | Q(
+                 stato_roboqubo=Produzione.StatoRoboqubo.CONCLUSA,
+                 invasettamento_congelato=True,
+                 pk__in=Subquery(produzioni_con_nc_separata),
+             )
+             | Q(carrelli_correnti__gt=0)
+         )
         .distinct()
         .order_by("-data_produzione", "-id")
     )

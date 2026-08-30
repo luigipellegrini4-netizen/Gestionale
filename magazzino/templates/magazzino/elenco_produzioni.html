@@ -93,7 +93,7 @@
                             <td>
                                 {% if produzione.stato == "ABORTITA" %}—{% else %}
                                 <strong>{% if not produzione.preparazione_chiusa_il %}Non avviato{% else %}{{ produzione.get_stato_roboqubo_display }}{% endif %}</strong>
-                                {% if produzione.preparazione_chiusa_il and produzione.stato_roboqubo != "CONCLUSA" and produzione.stato_roboqubo != "SOSPESA" and produzione.stato == "BOZZA" and perms.magazzino.operare_roboqubo %}<br><a class="btn btn-secondary" href="{% url 'gestione_produzione' produzione.pk %}#roboqubo">Riprendi RoboQbo</a>{% elif produzione.stato_roboqubo == "SOSPESA" %}<br><small>In attesa del RQ</small>{% endif %}
+                                {% if produzione.stato_roboqubo == "SOSPESA" %}<br><small>In attesa del RQ</small>{% elif produzione.preparazione_chiusa_il and produzione.stato == "BOZZA" and perms.magazzino.operare_roboqubo %}{% if produzione.stato_roboqubo != "CONCLUSA" or produzione.chiusa_per_nc and produzione.batch_da_assegnare %}<br><a class="btn btn-secondary" href="{% url 'gestione_produzione' produzione.pk %}#roboqubo">Riprendi RoboQbo</a>{% endif %}{% endif %}
                                 {% endif %}
                             </td>
                             <td>

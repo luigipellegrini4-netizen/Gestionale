@@ -315,15 +315,20 @@ class SituazioneMagazzinoTests(TestCase):
         articoli = list(response.context["articoli"])
         self.assertEqual([a.pk for a in articoli], [self.prodotto.pk, self.imballo.pk])
 
+        categorie_attese = [
+            "Materia prima", "MOCA", "Semilavorato",
+            "Prodotto finito", "Packaging", "Igiene", "Consumabili",
+            "Ricambi",
+        ]
         self.assertEqual(
             [gruppo["nome"] for gruppo in response.context["gruppi_articoli"]],
-            [
-                "Materia prima", "MOCA", "Semilavorato",
-                "Prodotto finito", "Packaging", "Igiene", "Consumabili",
-                "Ricambi",
-            ],
+            categorie_attese,
         )
-        self.assertContains(response, 'class="category-group-header"', count=6)
+        self.assertContains(
+            response,
+            'class="category-group-header"',
+            count=len(categorie_attese),
+        )
 
     def test_articolo_rimanda_alla_scheda_e_ai_suoi_lotti(self):
         situazione = self.client.get(reverse("situazione_magazzino"))

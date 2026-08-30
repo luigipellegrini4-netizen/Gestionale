@@ -10,7 +10,7 @@ from .forms import (
     ConfermaProduzioneForm, ProduzioneForm,
 )
 from .models import Articolo, BatchProduzione, CarrelloProduzione, Giacenza, Lotto, MaterialeSospesoNonConformita, Movimento, NonConformitaLotto, PrelievoProduzione, Produzione, Ricetta, RigaRicetta, TankProduzione, Ubicazione
-from .services import apri_non_conformita_batch, calcola_quantita_teorica_ricetta, genera_codice_lotto_per_produzione, genera_codice_lotto_produzione, genera_codice_lotto_ripresa, registra_controlli_tank, risolvi_non_conformita_batch, risolvi_nc_produzione_derivata
+from .services import apri_non_conformita_batch, calcola_quantita_teorica_ricetta, genera_codice_lotto_per_produzione, genera_codice_lotto_produzione, genera_codice_lotto_ripresa, proponi_prelievi_articolo, registra_controlli_tank, risolvi_non_conformita_batch, risolvi_nc_produzione_derivata
 
 
 class FlussoProduzioneTreFasiTests(TestCase):
@@ -118,6 +118,23 @@ class FlussoProduzioneTreFasiTests(TestCase):
         self.assertFalse(form.is_valid())
         self.assertIn("produzione_puo_proseguire", form.errors)
 
+    def test_form_batch_nc_accetta_orari_non_compilati(self):
+        form = BatchProduzioneForm(data={
+            "ora_inizio": "", "ora_fine": "",
+            "esito_conformita": "NC",
+            "produzione_puo_proseguire": "SI",
+            "note": "NC rilevata prima dell'avvio",
+        })
+        self.assertTrue(form.is_valid(), form.errors)
+
+    def test_form_batch_conforme_richiede_entrambi_gli_orari(self):
+        form = BatchProduzioneForm(data={
+            "ora_inizio": "", "ora_fine": "",
+            "esito_conformita": "C", "note": "",
+        })
+        self.assertFalse(form.is_valid())
+        self.assertIn("Ora di inizio", str(form.non_field_errors()))
+
     def test_batch_nc_viene_messo_in_quarantena_ed_escluso_dai_tank(self):
         batch = BatchProduzione.objects.create(
             produzione=self.produzione, numero=1, ora_inizio=time(8),
@@ -130,7 +147,7 @@ class FlussoProduzioneTreFasiTests(TestCase):
         self.assertIsNone(batch.tank_id)
         self.assertEqual(nc.lotto_temporaneo, "260829")
         self.assertEqual(self.produzione.stato_roboqubo, Produzione.StatoRoboqubo.CON_NC)
-        self.assertTrue(self.produzione.invasettamento_congelato)
+        self.assertFalse(self.produzione.invasettamento_congelato)
         nuova = nc.produzioni_bloccate.get()
         self.assertEqual(nuova.numero_batch_previsti, 1)
         self.assertEqual(nuova.quantita_teorica_kg, Decimal("10.000"))
@@ -138,6 +155,10 @@ class FlussoProduzioneTreFasiTests(TestCase):
         self.assertEqual(batch.produzione_id, nuova.pk)
         self.assertEqual(self.produzione.numero_batch_previsti, 19)
         self.assertEqual(self.produzione.quantita_teorica_kg, Decimal("190.000"))
+        self.assertEqual(
+            self.produzione.quantita_teorica_kg,
+            calcola_quantita_teorica_ricetta(self.produzione),
+        )
 
     def test_rq_reintegra_batch_e_sblocca_la_produzione(self):
         batch = BatchProduzione.objects.create(
@@ -184,7 +205,11 @@ class FlussoProduzioneTreFasiTests(TestCase):
         nuova = nc.produzioni_bloccate.get()
         self.produzione.refresh_from_db()
         batch_nc.refresh_from_db()
-        self.assertEqual(self.produzione.fase, Produzione.Fase.INVASETTAMENTO)
+        self.assertEqual(self.produzione.fase, Produzione.Fase.ROBOQUBO)
+        self.assertEqual(
+            self.produzione.stato_roboqubo,
+            Produzione.StatoRoboqubo.CON_NC,
+        )
         self.assertEqual(self.produzione.numero_batch_previsti, 1)
         self.assertEqual(nuova.numero_batch_previsti, 19)
         self.assertEqual(nuova.quantita_teorica_kg, Decimal("190.000"))
@@ -194,6 +219,11 @@ class FlussoProduzioneTreFasiTests(TestCase):
         self.assertEqual(batch_nc.produzione, nuova)
         self.assertEqual(batch_nc.numero, 1)
         self.assertEqual(nuova.batch.count(), 19)
+        self.assertEqual(nuova.batch.count(), nuova.numero_batch_previsti)
+        self.assertEqual(
+            nuova.quantita_teorica_kg,
+            calcola_quantita_teorica_ricetta(nuova),
+        )
         self.assertEqual(
             nuova.batch.filter(stato=BatchProduzione.Stato.SOSPESO).count(), 18,
         )
@@ -271,6 +301,11 @@ class FlussoProduzioneTreFasiTests(TestCase):
             quantita=Decimal("20.000000"),
             ubicazione_destinazione=ubicazione_produzione,
         ).exists())
+
+        proposta = proponi_prelievi_articolo(
+            self.ingrediente, Decimal("1"),
+        )
+        self.assertFalse(proposta["completa"])
 
         risolvi_nc_produzione_derivata(
             nc, "REINTEGRA",
