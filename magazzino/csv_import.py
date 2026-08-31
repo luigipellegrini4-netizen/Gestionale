@@ -31,6 +31,7 @@ CONFIGURAZIONI_CSV = {
             "scorta_minima",
             "tipo_packaging",
             "attivo",
+            "tracciabilita_lotto",
             "note",
         ],
         "model": Articolo,
@@ -100,6 +101,9 @@ def importa_csv(tipo, contenuto):
         dati[campo_attivo] = _normalizza_booleano(dati[campo_attivo])
         if tipo == "articoli":
             dati["scorta_minima"] = dati["scorta_minima"].replace(",", ".")
+            dati["tracciabilita_lotto"] = _normalizza_booleano(
+                dati["tracciabilita_lotto"]
+            )
 
         esistente = configurazione["model"].objects.filter(
             **{f"{configurazione['key']}__iexact": chiave}

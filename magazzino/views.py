@@ -83,6 +83,7 @@ from .services import (
     conferma_lotto_parziale_produzione,
     concludi_invasettamento_senza_nuovo_lotto,
     calcola_quantita_teorica_ricetta,
+    riepilogo_materiali_ricetta,
 )
 
 from .models import (
@@ -103,6 +104,7 @@ from .models import (
     CarrelloProduzione,
     NonConformitaLotto,
     MaterialeSospesoNonConformita,
+    LottoUscitaProduzione,
 )
 from .csv_import import genera_template_csv, importa_csv
 from .backup_db import crea_backup, ripristina_backup, svuota_dati_magazzino
@@ -297,12 +299,32 @@ def situazione_magazzino(request):
         }
         for codice, nome, categorie in definizioni_gruppi
     ]
+    giacenze_inventario = list(
+        Giacenza.objects.filter(quantita__gt=0)
+        .select_related("lotto__articolo", "ubicazione")
+        .order_by(
+            "ubicazione__nome", "scaffale", "piano",
+            "lotto__articolo__codice", "lotto__codice_lotto", "pk",
+        )
+    )
+    ubicazioni_inventario = []
+    for giacenza in giacenze_inventario:
+        if (
+            not ubicazioni_inventario
+            or ubicazioni_inventario[-1]["ubicazione"].pk != giacenza.ubicazione_id
+        ):
+            ubicazioni_inventario.append({
+                "ubicazione": giacenza.ubicazione,
+                "righe": [],
+            })
+        ubicazioni_inventario[-1]["righe"].append(giacenza)
     return render(
         request,
         "magazzino/situazione_magazzino.html",
         {
             "articoli": articoli,
             "gruppi_articoli": gruppi_articoli,
+            "ubicazioni_inventario": ubicazioni_inventario,
         },
     )
 
@@ -312,15 +334,14 @@ def consumo(request):
         form = ConsumoForm(request.POST)
 
         if form.is_valid():
+            giacenza_selezionata = form.cleaned_data["giacenza"]
             try:
                 movimento = registra_consumo(
-                    lotto=form.cleaned_data["lotto"],
+                    lotto=giacenza_selezionata.lotto,
                     quantita=form.cleaned_data["quantita"],
-                    ubicazione_origine=form.cleaned_data[
-                        "ubicazione_origine"
-                    ],
-                    scaffale_origine=form.cleaned_data["scaffale_origine"],
-                    piano_origine=form.cleaned_data["piano_origine"],
+                    ubicazione_origine=giacenza_selezionata.ubicazione,
+                    scaffale_origine=giacenza_selezionata.scaffale,
+                    piano_origine=giacenza_selezionata.piano,
                     causale=form.cleaned_data["causale"],
                     note=form.cleaned_data["note"],
                     operatore=request.user,
@@ -374,6 +395,43 @@ def rettifica_inventario(request):
     else:
         form = RettificaInventarioForm()
     return render(request, "magazzino/rettifica_inventario.html", {"form": form})
+
+
+@permission_required("magazzino.operare_magazzino", raise_exception=True)
+def disponibilita_rettifica(request):
+    ubicazione_id = request.GET.get("ubicazione")
+    scaffale = request.GET.get("scaffale")
+    if not ubicazione_id or not ubicazione_id.isdigit():
+        return JsonResponse({"scaffali": [], "giacenze": []})
+    queryset = Giacenza.objects.filter(ubicazione_id=ubicazione_id)
+    if scaffale is None:
+        valori = queryset.values_list("scaffale", flat=True).distinct().order_by("scaffale")
+        return JsonResponse({
+            "scaffali": [
+                {"value": valore or "__VUOTO__", "label": valore or "Senza scaffale"}
+                for valore in valori
+            ],
+            "giacenze": [],
+        })
+    scaffale_db = "" if scaffale == "__VUOTO__" else scaffale
+    giacenze = queryset.filter(scaffale=scaffale_db).select_related(
+        "lotto__articolo", "ubicazione",
+    ).order_by("lotto__articolo__codice", "lotto__codice_lotto", "piano")
+    return JsonResponse({
+        "scaffali": [],
+        "giacenze": [
+            {
+                "id": giacenza.pk,
+                "label": (
+                    f"{giacenza.lotto.articolo.codice} · lotto "
+                    f"{giacenza.lotto.codice_visualizzato} · quantità "
+                    f"{giacenza.quantita} {giacenza.lotto.articolo.unita_misura} · "
+                    f"piano {giacenza.piano or '—'}"
+                ),
+            }
+            for giacenza in giacenze
+        ],
+    })
 
 
 def elenco_movimenti(request):
@@ -882,6 +940,12 @@ def dettaglio_lotto(request, pk):
 
     tracciabilita_monte = []
 
+    uscita_produzione = LottoUscitaProduzione.objects.filter(
+        lotto=lotto,
+    ).select_related(
+        "produzione", "non_conformita",
+    ).first()
+
     produzione = (
         Produzione.objects
         .filter(
@@ -891,6 +955,26 @@ def dettaglio_lotto(request, pk):
         .prefetch_related("tank")
         .first()
     )
+    if produzione is None and uscita_produzione is not None:
+        produzione = uscita_produzione.produzione
+
+    nc_produzione_ids = set()
+    if produzione is not None:
+        nc_produzione_ids.update(
+            produzione.non_conformita.values_list("pk", flat=True)
+        )
+        if produzione.bloccata_da_nc_id:
+            nc_produzione_ids.add(produzione.bloccata_da_nc_id)
+    if uscita_produzione is not None and uscita_produzione.non_conformita_id:
+        nc_produzione_ids.add(uscita_produzione.non_conformita_id)
+    non_conformita_produzione = NonConformitaLotto.objects.filter(
+        pk__in=nc_produzione_ids,
+    ).select_related("aperta_da", "gestita_da").order_by("pk")
+    recuperi_nc = MaterialeSospesoNonConformita.objects.filter(
+        Q(lotto_originale=lotto) | Q(lotto_recuperato=lotto),
+    ).select_related(
+        "lotto_originale__articolo", "lotto_recuperato__articolo", "non_conformita",
+    ).order_by("non_conformita_id", "id")
 
     if produzione is not None:
         prelievi = (
@@ -1061,12 +1145,15 @@ def dettaglio_lotto(request, pk):
             "tracciabilita_monte": tracciabilita_monte,
             "tracciabilita_valle": tracciabilita_valle,
             "produzione": produzione,
+            "non_conformita_produzione": non_conformita_produzione,
+            "recuperi_nc": recuperi_nc,
             "tank_produzione": produzione.tank.all() if produzione else [],
         },
     )
 
 
 def elenco_articoli(request):
+    query = (request.GET.get("q") or "").strip()
     articoli_queryset = (
         Articolo.objects
         .annotate(
@@ -1079,6 +1166,20 @@ def elenco_articoli(request):
             "codice",
         )
     )
+    if query:
+        filtro = (
+            Q(codice__icontains=query)
+            | Q(descrizione__icontains=query)
+            | Q(nome_produzione__icontains=query)
+        )
+        categorie_trovate = [
+            valore
+            for valore, etichetta in Articolo.Categoria.choices
+            if query.casefold() in etichetta.casefold()
+        ]
+        if categorie_trovate:
+            filtro |= Q(categoria__in=categorie_trovate)
+        articoli_queryset = articoli_queryset.filter(filtro)
 
     articoli = Paginator(articoli_queryset, 50).get_page(
         request.GET.get("page")
@@ -1090,6 +1191,7 @@ def elenco_articoli(request):
         {
             "articoli": articoli,
             "page_obj": articoli,
+            "query": query,
         },
     )
 
@@ -2204,7 +2306,12 @@ def gestione_produzione(request, pk):
             batch_form.add_error(None, "La fase RoboQbo non consente di registrare altri batch.")
         elif (
             batch_pianificato is None
-            and produzione.batch.exclude(stato=BatchProduzione.Stato.SCARTATO).count()
+            and produzione.batch.exclude(
+                stato__in=[
+                    BatchProduzione.Stato.SCARTATO,
+                    BatchProduzione.Stato.ANNULLATO,
+                ],
+            ).count()
             >= produzione.numero_batch_previsti
         ):
             batch_form.add_error(None, "Sono già stati registrati tutti i batch previsti.")
@@ -2299,7 +2406,12 @@ def gestione_produzione(request, pk):
             stato=NonConformitaLotto.Stato.CHIUSA,
         )
         if (
-            produzione.batch.exclude(stato=BatchProduzione.Stato.SCARTATO).count()
+            produzione.batch.exclude(
+                stato__in=[
+                    BatchProduzione.Stato.SCARTATO,
+                    BatchProduzione.Stato.ANNULLATO,
+                ],
+            ).count()
             != produzione.numero_batch_previsti
         ):
             messages.error(request, "Registra tutti i batch previsti prima di chiudere RoboQbo.")
@@ -2356,7 +2468,7 @@ def gestione_produzione(request, pk):
             controllo_tank_form.add_error(None, "Non c'è un tank aperto.")
         elif controllo_tank_form.is_valid():
             try:
-                registra_controlli_tank(
+                tank_controllato = registra_controlli_tank(
                     tank_corrente,
                     controllo_tank_form.cleaned_data["gradi_brix"],
                     controllo_tank_form.cleaned_data["ph"],
@@ -2364,7 +2476,20 @@ def gestione_produzione(request, pk):
             except ValueError as errore:
                 controllo_tank_form.add_error(None, str(errore))
             else:
-                messages.success(request, "Controlli del tank registrati.")
+                if tank_controllato.non_conforme:
+                    messages.error(
+                        request,
+                        f"Tank {tank_controllato.numero}: controllo NON CONFORME. "
+                        "Aprire una non conformità.",
+                    )
+                elif tank_controllato.ph_in_allerta:
+                    messages.warning(
+                        request,
+                        f"Tank {tank_controllato.numero}: allerta pH "
+                        f"({tank_controllato.ph}). Il valore supera 4,1 ma non 4,4.",
+                    )
+                else:
+                    messages.success(request, "Controlli del tank conformi.")
                 return redirect(f"{produzione_url}#roboqubo")
 
     if request.method == "POST" and request.POST.get("azione") == "registra_pastorizzazione":
@@ -2551,9 +2676,12 @@ def gestione_produzione(request, pk):
                         pk=produzione.pk,
                     )
 
-    prelievi = produzione.prelievi.all().order_by(
-        "id",
-    )
+    prelievi = list(produzione.prelievi.all().order_by("id"))
+    for prelievo in prelievi:
+        prelievo.quantita_attribuita = max(
+            prelievo.quantita_prelevata - prelievo.quantita_trasferita_nc,
+            Decimal("0"),
+        )
     scarti_tank_mancanti = (
         tank_corrente.prelievi.filter(quantita_scarto__isnull=True).exists()
         if tank_corrente is not None
@@ -2601,6 +2729,7 @@ def gestione_produzione(request, pk):
             "ricetta": ricetta,
             "ingredienti_ricetta": ingredienti_ricetta,
             "prelievi": prelievi,
+            "riepilogo_materiali": riepilogo_materiali_ricetta(produzione),
             "scarti_tank_mancanti": scarti_tank_mancanti,
             "tank_pronto_controlli": tank_pronto_controlli,
             "conferma_form": conferma_form,
@@ -2621,7 +2750,12 @@ def gestione_produzione(request, pk):
             ),
             "puo_registrare_batch": (
                 produzione.batch.filter(stato=BatchProduzione.Stato.DA_LAVORARE).exists()
-                or produzione.batch.exclude(stato=BatchProduzione.Stato.SCARTATO).count()
+                or produzione.batch.exclude(
+                    stato__in=[
+                        BatchProduzione.Stato.SCARTATO,
+                        BatchProduzione.Stato.ANNULLATO,
+                    ],
+                ).count()
                 < produzione.numero_batch_previsti
             ),
             "carrelli": produzione.carrelli.all(),
@@ -3406,7 +3540,10 @@ def home(request):
 @permission_required("magazzino.gestire_produzioni", raise_exception=True)
 def dettaglio_gestione_produzione(request, pk):
     produzione = get_object_or_404(
-        Produzione.objects.select_related("articolo", "lotto", "ubicazione_destinazione")
+        Produzione.objects.select_related(
+            "articolo", "lotto", "ubicazione_destinazione",
+            "bloccata_da_nc", "derivata_da",
+        )
         .prefetch_related(
             "prelievi__lotto__articolo", "prelievi__ubicazione_origine",
             "batch__tank", "tank__batch", "carrelli__lotto_uscita__lotto",
@@ -3414,9 +3551,16 @@ def dettaglio_gestione_produzione(request, pk):
         ),
         pk=pk,
     )
+    prelievi = list(produzione.prelievi.all())
+    for prelievo in prelievi:
+        prelievo.quantita_attribuita = max(
+            prelievo.quantita_prelevata - prelievo.quantita_trasferita_nc,
+            Decimal("0"),
+        )
     return render(request, "magazzino/dettaglio_gestione_produzione.html", {
         "produzione": produzione,
-        "prelievi": produzione.prelievi.all(),
+        "prelievi": prelievi,
+        "riepilogo_materiali": riepilogo_materiali_ricetta(produzione),
         "batch_registrati": produzione.batch.all(),
         "tank": produzione.tank.all(),
         "carrelli": produzione.carrelli.all(),

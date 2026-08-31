@@ -43,12 +43,16 @@ class ImportazioneCSVTests(TestCase):
         self.assertIn("attachment", response["Content-Disposition"])
         self.assertIn("codice;ragione_sociale", response.content.decode("utf-8-sig"))
 
-    def test_template_articoli_include_i_soli_campi_anagrafici(self):
+    def test_template_articoli_include_i_campi_anagrafici(self):
         response = self.client.get(reverse("template_csv", args=["articoli"]))
 
         self.assertEqual(response.status_code, 200)
         self.assertIn(
             "unita_misura;scorta_minima",
+            response.content.decode("utf-8-sig"),
+        )
+        self.assertIn(
+            "attivo;tracciabilita_lotto;note",
             response.content.decode("utf-8-sig"),
         )
 
@@ -107,9 +111,9 @@ class ImportazioneCSVTests(TestCase):
             "articoli",
             "codice;descrizione;nome_produzione;categoria;unita_misura;"
             "scorta_minima;tipo_packaging;"
-            "attivo;note\n"
+            "attivo;tracciabilita_lotto;note\n"
             "MP-CSV;Materia prima CSV;Materia CSV;MATERIA_PRIMA;KG;2,5;"
-            ";vero;\n",
+            ";vero;vero;\n",
         )
 
         self.assertTrue(Ubicazione.objects.filter(nome="Cella A").exists())
@@ -122,9 +126,9 @@ class ImportazioneCSVTests(TestCase):
         response = self.carica(
             "articoli",
             "codice;descrizione;nome_produzione;categoria;unita_misura;"
-            "scorta_minima;tipo_packaging;attivo;note\n"
-            "CONS-CSV;Guanti monouso;;CONSUMABILI;PZ;10;;vero;\n"
-            "RIC-CSV;Guarnizione macchina;;RICAMBI;PZ;2;;vero;\n",
+            "scorta_minima;tipo_packaging;attivo;tracciabilita_lotto;note\n"
+            "CONS-CSV;Guanti monouso;;CONSUMABILI;PZ;10;;vero;falso;\n"
+            "RIC-CSV;Guarnizione macchina;;RICAMBI;PZ;2;;vero;vero;\n",
         )
 
         self.assertRedirects(response, reverse("importazione_csv"))
@@ -138,3 +142,26 @@ class ImportazioneCSVTests(TestCase):
                 codice="RIC-CSV", categoria=Articolo.Categoria.RICAMBI,
             ).exists()
         )
+
+    def test_import_articolo_rispetta_tracciabilita_lotto(self):
+        intestazione = (
+            "codice;descrizione;nome_produzione;categoria;unita_misura;"
+            "scorta_minima;tipo_packaging;attivo;tracciabilita_lotto;note\n"
+        )
+        self.carica(
+            "articoli",
+            intestazione
+            + "NO-LOTTO;Articolo senza lotto;;CONSUMABILI;PZ;0;;vero;no;\n",
+        )
+
+        articolo = Articolo.objects.get(codice="NO-LOTTO")
+        self.assertFalse(articolo.tracciabilita_lotto)
+
+        self.carica(
+            "articoli",
+            intestazione
+            + "NO-LOTTO;Articolo con lotto;;CONSUMABILI;PZ;0;;vero;si;\n",
+        )
+
+        articolo.refresh_from_db()
+        self.assertTrue(articolo.tracciabilita_lotto)

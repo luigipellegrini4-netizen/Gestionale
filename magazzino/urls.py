@@ -78,6 +78,11 @@ urlpatterns = [
         views.rettifica_inventario,
         name="rettifica_inventario",
     ),
+    path(
+        "rettifica-inventario/disponibilita/",
+        views.disponibilita_rettifica,
+        name="disponibilita_rettifica",
+    ),
 
     path(
         "movimenti/",

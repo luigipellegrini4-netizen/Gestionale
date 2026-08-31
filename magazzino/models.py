@@ -926,8 +926,34 @@ class TankProduzione(models.Model):
         return self.gradi_brix is not None and self.ph is not None
 
     @property
+    def brix_conforme(self):
+        return self.controllato and Decimal("40") <= self.gradi_brix <= Decimal("45")
+
+    @property
+    def ph_in_allerta(self):
+        return self.controllato and Decimal("4.10") < self.ph <= Decimal("4.40")
+
+    @property
+    def ph_non_conforme(self):
+        return self.controllato and self.ph > Decimal("4.40")
+
+    @property
+    def non_conforme(self):
+        return self.controllato and (not self.brix_conforme or self.ph_non_conforme)
+
+    @property
     def conforme(self):
-        return self.controllato and self.ph <= Decimal("4.10") and 40 <= self.gradi_brix <= 45
+        return self.controllato and self.brix_conforme and self.ph <= Decimal("4.10")
+
+    @property
+    def esito_controlli(self):
+        if not self.controllato:
+            return "APERTO"
+        if self.non_conforme:
+            return "NC"
+        if self.ph_in_allerta:
+            return "ALLERTA"
+        return "CONFORME"
 
     def __str__(self):
         return f"Produzione {self.produzione_id} - Tank {self.numero}"
@@ -947,6 +973,7 @@ class BatchProduzione(models.Model):
         SOSPESO = "SOSPESO", "Sospeso per NC"
         SCARTATO = "SCARTATO", "Scartato"
         REINTEGRATO = "REINTEGRATO", "Reintegrato"
+        ANNULLATO = "ANNULLATO", "Annullato per non conformità"
 
     produzione = models.ForeignKey(Produzione, on_delete=models.CASCADE, related_name="batch")
     tank = models.ForeignKey(TankProduzione, on_delete=models.CASCADE, related_name="batch", null=True, blank=True)
@@ -986,12 +1013,15 @@ class MaterialeSospesoNonConformita(models.Model):
     prelievo = models.ForeignKey(
         "PrelievoProduzione", on_delete=models.PROTECT, related_name="sospensioni_nc",
     )
+    lotto_originale = models.ForeignKey(
+        Lotto, on_delete=models.PROTECT, related_name="materiali_recuperati_nc",
+        null=True, blank=True,
+    )
     lotto_recuperato = models.ForeignKey(
         Lotto, on_delete=models.PROTECT, related_name="materiali_sospesi_nc",
         null=True, blank=True,
     )
     quantita = models.DecimalField(max_digits=12, decimal_places=6)
-    descrizione_miscela = models.CharField(max_length=200, blank=True)
     esito = models.CharField(max_length=15, choices=Esito.choices, default=Esito.DA_VALUTARE)
     nuova_data_scadenza = models.DateField(null=True, blank=True)
     note = models.TextField(blank=True)

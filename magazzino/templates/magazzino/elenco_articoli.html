@@ -23,6 +23,20 @@ Articoli - MIRA
 
 </div>
 
+<div class="card">
+    <form method="get" role="search">
+        <label for="ricerca-articoli"><strong>Cerca articolo</strong></label>
+        <div class="form-actions">
+            <input id="ricerca-articoli" type="search" name="q" value="{{ query }}"
+                   placeholder="Codice, articolo, nome produzione o categoria">
+            <button type="submit" class="btn">Cerca</button>
+            {% if query %}
+                <a href="{% url 'elenco_articoli' %}" class="btn btn-secondary">Azzera ricerca</a>
+            {% endif %}
+        </div>
+    </form>
+</div>
+
 
 <div class="table-container">
 
@@ -34,10 +48,15 @@ Articoli - MIRA
                 <tr>
                     <th>Codice</th>
                     <th>Articolo</th>
+                    <th>Nome produzione</th>
                     <th>Categoria</th>
+                    <th>Tipo packaging</th>
                     <th>Unità</th>
+                    <th>Scorta minima</th>
+                    <th>Tracciabilità lotto</th>
                     <th>Giacenza</th>
                     <th>Stato</th>
+                    <th>Note</th>
                     <th>Azioni</th>
                 </tr>
             </thead>
@@ -60,13 +79,21 @@ Articoli - MIRA
                             {{ articolo.descrizione }}
                         </td>
 
+                        <td>{{ articolo.nome_produzione|default:"—" }}</td>
+
                         <td>
                             {{ articolo.get_categoria_display }}
                         </td>
 
+                        <td>{{ articolo.get_tipo_packaging_display|default:"—" }}</td>
+
                         <td>
                             {{ articolo.unita_misura }}
                         </td>
+
+                        <td>{{ articolo.scorta_minima }} {{ articolo.unita_misura }}</td>
+
+                        <td>{% if articolo.tracciabilita_lotto %}Sì{% else %}No{% endif %}</td>
 
                         <td>
                             <strong>
@@ -85,6 +112,8 @@ Articoli - MIRA
                                 </span>
                             {% endif %}
                         </td>
+
+                        <td>{{ articolo.note|default:"—"|truncatechars:80 }}</td>
 
                         <td>
                             <a
@@ -113,7 +142,7 @@ Articoli - MIRA
     {% else %}
 
         <p>
-            Non sono presenti articoli.
+            {% if query %}Nessun articolo trovato per “{{ query }}”.{% else %}Non sono presenti articoli.{% endif %}
         </p>
 
     {% endif %}

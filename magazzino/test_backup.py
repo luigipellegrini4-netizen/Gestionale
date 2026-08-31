@@ -10,8 +10,8 @@ from django.urls import reverse
 from .backup_db import crea_backup, ripristina_backup
 from .models import (
     Articolo, BatchProduzione, CarrelloProduzione, Fornitore, Giacenza,
-    Lotto, Movimento, NonConformitaLotto, Produzione, TankProduzione,
-    Ubicazione,
+    Lotto, MaterialeSospesoNonConformita, Movimento, NonConformitaLotto,
+    PrelievoProduzione, Produzione, TankProduzione, Ubicazione,
 )
 
 
@@ -225,3 +225,43 @@ class BackupDatabaseTests(TestCase):
         self.assertEqual(derivata_ripristinata.derivata_da_id, originale.pk)
         self.assertEqual(derivata_ripristinata.bloccata_da_nc_id, nc.pk)
         self.assertEqual(NonConformitaLotto.objects.get(pk=nc.pk).batch_id, batch.pk)
+
+    def test_vecchio_backup_ricostruisce_lotto_originale_materiale_nc(self):
+        prodotto = Articolo.objects.create(
+            codice="PF-NC-LEGACY", descrizione="Prodotto NC legacy",
+            categoria=Articolo.Categoria.PRODOTTO_FINITO,
+            unita_misura=Articolo.UnitaMisura.PZ,
+        )
+        produzione = Produzione.objects.create(
+            articolo=prodotto, data_produzione="2026-08-30",
+            numero_batch_previsti=1, lotto_provvisorio="TEMP-LEGACY",
+        )
+        prelievo = PrelievoProduzione.objects.create(
+            produzione=produzione, lotto=self.lotto,
+            ubicazione_origine=self.ubicazione,
+            quantita_prelevata=Decimal("1"), quantita_movimentata=Decimal("1"),
+        )
+        batch = BatchProduzione.objects.create(
+            produzione=produzione, numero=1, esito_conformita="NC",
+        )
+        nc = NonConformitaLotto.objects.create(
+            produzione=produzione, batch=batch, motivo="NC legacy",
+            aperta_da=self.superuser,
+        )
+        materiale = MaterialeSospesoNonConformita.objects.create(
+            non_conformita=nc, prelievo=prelievo,
+            lotto_originale=self.lotto, quantita=Decimal("1"),
+        )
+        documento = json.loads(crea_backup())
+        record = next(
+            r for r in documento["dati"]
+            if r["model"] == "magazzino.materialesospesononconformita"
+            and r["pk"] == materiale.pk
+        )
+        record["fields"].pop("lotto_originale")
+
+        with TemporaryDirectory() as cartella, override_settings(BASE_DIR=cartella):
+            ripristina_backup(json.dumps(documento).encode("utf-8"))
+
+        materiale.refresh_from_db()
+        self.assertEqual(materiale.lotto_originale_id, self.lotto.pk)

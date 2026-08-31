@@ -338,6 +338,29 @@
 </div>
 {% endif %}
 
+{% if non_conformita_produzione %}
+<div class="card">
+    <h3>Non conformità collegate alla produzione del lotto</h3>
+    <div class="table-container">
+        <table>
+            <thead><tr><th>Numero NC</th><th>Stato</th><th>Batch origine</th><th>Apertura</th><th>Motivo</th><th>Collegamento</th></tr></thead>
+            <tbody>
+                {% for nc in non_conformita_produzione %}
+                <tr>
+                    <td><strong>NC-{{ nc.pk }}</strong></td>
+                    <td>{{ nc.get_stato_display }}</td>
+                    <td>{{ nc.numero_batch_origine|default:"—" }}</td>
+                    <td>{{ nc.data_apertura|date:"d/m/Y H:i" }}</td>
+                    <td>{{ nc.motivo }}</td>
+                    <td><a class="btn btn-secondary" href="{% url 'dettaglio_non_conformita' nc.pk %}">Apri NC</a></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+
 
 <div class="card">
 
@@ -406,6 +429,20 @@
 <div class="card">
 
     <h3>Tracciabilità</h3>
+
+    {% if recuperi_nc %}
+    <h4>Recuperi da non conformità</h4>
+    <div class="table-container"><table>
+        <thead><tr><th>NC</th><th>Lotto originale</th><th>Lotto recuperato</th><th>Quantità</th><th>Esito</th></tr></thead>
+        <tbody>{% for recupero in recuperi_nc %}<tr>
+            <td><a href="{% url 'dettaglio_non_conformita' recupero.non_conformita.pk %}">NC-{{ recupero.non_conformita.pk }}</a></td>
+            <td>{% if recupero.lotto_originale %}<a href="{% url 'dettaglio_lotto' recupero.lotto_originale.pk %}">{{ recupero.lotto_originale.codice_lotto }}</a>{% else %}—{% endif %}</td>
+            <td>{% if recupero.lotto_recuperato %}<a href="{% url 'dettaglio_lotto' recupero.lotto_recuperato.pk %}">{{ recupero.lotto_recuperato.codice_lotto }}</a>{% else %}—{% endif %}</td>
+            <td>{{ recupero.quantita }} {{ recupero.prelievo.lotto.articolo.unita_misura }}</td>
+            <td>{{ recupero.get_esito_display }}</td>
+        </tr>{% endfor %}</tbody>
+    </table></div>
+    {% endif %}
 
     <h4>A monte - Da quali lotti deriva</h4>
 

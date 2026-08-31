@@ -48,6 +48,27 @@ def riallinea_quantita_produzione(produzione, numero_batch=None):
     return produzione.quantita_teorica_kg
 
 
+def riepilogo_materiali_ricetta(produzione):
+    """Materiali attribuiti alla lavorazione corrente: ricetta × batch presenti."""
+    ricetta = produzione.articolo.ricette.filter(attiva=True).first()
+    if ricetta is None:
+        return []
+    numero_batch = Decimal(produzione.numero_batch_previsti)
+    return [
+        {
+            "articolo": riga.articolo,
+            "quantita_per_batch": riga.quantita,
+            "numero_batch": produzione.numero_batch_previsti,
+            "quantita_totale": (riga.quantita * numero_batch).quantize(
+                Decimal("0.000001")
+            ),
+        }
+        for riga in ricetta.righe.select_related("articolo").filter(
+            ingrediente_prodotto=True,
+        )
+    ]
+
+
 @transaction.atomic
 def concludi_invasettamento_senza_nuovo_lotto(produzione):
     """Conclude una fase i cui tank sono già confluiti in lotti di uscita."""
@@ -415,16 +436,12 @@ def apri_non_conformita_batch(batch, produzione_puo_proseguire, motivo, operator
             )
             movimento_quarantena.tipo = Movimento.Tipo.QUARANTENA
             movimento_quarantena.save(update_fields=["tipo"])
-            riferimento_articolo = f"{origine.articolo.codice} {origine.articolo.descrizione}".lower()
             MaterialeSospesoNonConformita.objects.create(
                 non_conformita=nc,
                 prelievo=prelievo,
+                lotto_originale=origine,
                 lotto_recuperato=lotto_recuperato,
                 quantita=quantita,
-                descrizione_miscela=(
-                    "Premiscela zucchero / acido ascorbico"
-                    if "zuccher" in riferimento_articolo or "ascorb" in riferimento_articolo else ""
-                ),
                 esito=MaterialeSospesoNonConformita.Esito.CONSERVA,
                 nuova_data_scadenza=nuova_scadenza,
                 note=f"Disponibile nel Magazzino produzione per {nuovo_temp}.",
@@ -468,13 +485,11 @@ def risolvi_non_conformita_batch(non_conformita, esito_batch, decisioni_material
     produzione = nc.produzione
     batch.stato = (
         BatchProduzione.Stato.SCARTATO
-        if esito_batch == "SCARTA" else BatchProduzione.Stato.CONFORME
+        if esito_batch == "SCARTA" else BatchProduzione.Stato.REINTEGRATO
     )
     if esito_batch == "SCARTA":
         batch.ora_inizio = None
         batch.ora_fine = None
-    else:
-        batch.esito_conformita = "C"
     batch.risolto_il = timezone.now()
     batch.save(update_fields=[
         "stato", "esito_conformita", "ora_inizio", "ora_fine", "risolto_il",
@@ -617,21 +632,17 @@ def risolvi_nc_produzione_derivata(
     batch = nc.batch
     batch.stato = (
         BatchProduzione.Stato.SCARTATO
-        if esito_batch == "SCARTA" else BatchProduzione.Stato.CONFORME
+        if esito_batch == "SCARTA" else BatchProduzione.Stato.REINTEGRATO
     )
     if esito_batch == "SCARTA":
         batch.ora_inizio = None
         batch.ora_fine = None
-    else:
-        batch.esito_conformita = "C"
     batch.risolto_il = timezone.now()
     batch.save(update_fields=[
         "stato", "esito_conformita", "ora_inizio", "ora_fine", "risolto_il",
     ])
 
-    deve_abortire = almeno_uno_scartato or (
-        esito_batch == "SCARTA" and not produzione.batch.exclude(pk=batch.pk).exists()
-    )
+    deve_abortire = almeno_uno_scartato and esito_batch == "SCARTA"
     if deve_abortire:
         for materiale in materiali:
             if materiale.esito != MaterialeSospesoNonConformita.Esito.SCARTA:
@@ -667,7 +678,7 @@ def risolvi_nc_produzione_derivata(
             "stato", "fase", "chiusa_per_nc", "invasettamento_congelato", "stato_roboqubo",
             "stato_invasettamento",
         ])
-    else:
+    elif not almeno_uno_scartato:
         for materiale in materiali:
             lotto = materiale.lotto_recuperato
             if lotto is None:
@@ -739,6 +750,60 @@ def risolvi_nc_produzione_derivata(
             "preparazione_chiusa_il", "fase", "stato_roboqubo",
             "invasettamento_congelato", "quantita_batch_reintegrato_kg",
             "numero_batch_previsti", "quantita_teorica_kg",
+        ])
+    else:
+        # Batch reintegrato + almeno un materiale scartato: resta lavorabile
+        # soltanto il batch recuperato; tutti i batch futuri vengono annullati.
+        for materiale in materiali:
+            lotto = materiale.lotto_recuperato
+            if lotto is None:
+                raise ValueError("Manca il lotto recuperato di un materiale sospeso.")
+            if materiale.esito == MaterialeSospesoNonConformita.Esito.SCARTA:
+                for giacenza in Giacenza.objects.select_for_update().filter(
+                    lotto=lotto, quantita__gt=0,
+                ):
+                    quantita_scartata = giacenza.quantita
+                    giacenza.quantita = Decimal("0")
+                    giacenza.save(update_fields=["quantita"])
+                    Movimento.objects.create(
+                        tipo=Movimento.Tipo.SCARTO_NC,
+                        lotto=lotto,
+                        quantita=quantita_scartata,
+                        ubicazione_origine=giacenza.ubicazione,
+                        scaffale_origine=giacenza.scaffale,
+                        piano_origine=giacenza.piano,
+                        causale=f"Scarto materiale per NC-{nc.pk}",
+                        note=materiale.note,
+                        eseguito_da=responsabile,
+                    )
+            else:
+                materiale.esito = MaterialeSospesoNonConformita.Esito.CONSERVA
+                materiale.save(update_fields=["esito"])
+
+        produzione.batch.exclude(pk=batch.pk).filter(
+            stato=BatchProduzione.Stato.SOSPESO,
+        ).update(
+            stato=BatchProduzione.Stato.ANNULLATO,
+            risolto_il=timezone.now(),
+        )
+        produzione.numero_batch_previsti = 1
+        ricetta = produzione.articolo.ricette.filter(attiva=True).first()
+        if ricetta is not None:
+            produzione.quantita_batch_reintegrato_kg = sum(
+                ricetta.righe.filter(ingrediente_prodotto=True).values_list(
+                    "quantita", flat=True,
+                ),
+                Decimal("0"),
+            )
+        produzione.quantita_teorica_kg = calcola_quantita_teorica_ricetta(produzione)
+        produzione.preparazione_chiusa_il = timezone.now()
+        produzione.fase = Produzione.Fase.ROBOQUBO
+        produzione.stato_roboqubo = Produzione.StatoRoboqubo.NORMALE
+        produzione.invasettamento_congelato = False
+        produzione.save(update_fields=[
+            "numero_batch_previsti", "quantita_batch_reintegrato_kg",
+            "quantita_teorica_kg", "preparazione_chiusa_il", "fase",
+            "stato_roboqubo", "invasettamento_congelato",
         ])
 
     nc.stato = NonConformitaLotto.Stato.CHIUSA

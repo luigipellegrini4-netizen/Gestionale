@@ -2,10 +2,13 @@ from datetime import date, timedelta
 from decimal import Decimal
 
 from django.contrib.auth import get_user_model
+from django.contrib.auth.models import Permission
 from django.db import IntegrityError, transaction
 from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
+
+from .forms import ConsumoForm, RettificaInventarioForm
 
 from .models import (
     Articolo,
@@ -103,6 +106,99 @@ class OperazioniMagazzinoTests(TestCase):
         self.assertEqual(movimento.tipo, Movimento.Tipo.CARICO)
         self.assertEqual(movimento.quantita, Decimal("2.5"))
         self.assertEqual(movimento.eseguito_da, self.operatore)
+
+    def test_form_scarico_ricerca_articolo_e_usa_la_giacenza_selezionata(self):
+        form = ConsumoForm(data={
+            "ricerca_articolo": "Materia prima",
+            "articolo": self.articolo.pk,
+            "giacenza": self.giacenza.pk,
+            "quantita": "2.000",
+            "causale": "Consumo test",
+            "note": "",
+        })
+
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertEqual(form.cleaned_data["giacenza"], self.giacenza)
+        self.assertEqual(form.cleaned_data["giacenza"].lotto, self.lotto)
+
+    def test_form_scarico_blocca_quantita_superiore_alla_giacenza(self):
+        form = ConsumoForm(data={
+            "ricerca_articolo": "MP-TEST",
+            "articolo": self.articolo.pk,
+            "giacenza": self.giacenza.pk,
+            "quantita": "11.000",
+            "causale": "Consumo test",
+            "note": "",
+        })
+
+        self.assertFalse(form.is_valid())
+        self.assertIn("quantita", form.errors)
+
+    def test_post_scarico_usa_articolo_e_giacenza_selezionata(self):
+        self.operatore.user_permissions.add(
+            Permission.objects.get(codename="operare_magazzino"),
+        )
+        self.client.force_login(self.operatore)
+
+        response = self.client.post(reverse("consumo"), {
+            "ricerca_articolo": "MP-TEST",
+            "articolo": self.articolo.pk,
+            "giacenza": self.giacenza.pk,
+            "quantita": "2.000",
+            "causale": "Scarico test HTTP",
+            "note": "",
+        })
+
+        self.assertRedirects(response, reverse("consumo"))
+        self.giacenza.refresh_from_db()
+        self.assertEqual(self.giacenza.quantita, Decimal("8"))
+        self.assertTrue(Movimento.objects.filter(
+            tipo=Movimento.Tipo.CONSUMO,
+            lotto=self.lotto,
+            quantita=Decimal("2"),
+            ubicazione_origine=self.origine,
+        ).exists())
+
+    def test_rettifica_filtra_a_cascata_ubicazione_scaffale_e_giacenza(self):
+        giacenza_scaffale = Giacenza.objects.create(
+            lotto=self.lotto, ubicazione=self.destinazione,
+            scaffale="S1", piano="P2", quantita=Decimal("4"),
+        )
+        form = RettificaInventarioForm(data={
+            "ubicazione": self.destinazione.pk,
+            "scaffale": "S1",
+            "giacenza": giacenza_scaffale.pk,
+            "quantita_reale": "3.5",
+            "motivo": "Conteggio inventario",
+            "note": "",
+        })
+
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertEqual(form.cleaned_data["giacenza"], giacenza_scaffale)
+
+    def test_endpoint_rettifica_restituisce_lotti_quantita_e_piano(self):
+        giacenza_scaffale = Giacenza.objects.create(
+            lotto=self.lotto, ubicazione=self.destinazione,
+            scaffale="S1", piano="P2", quantita=Decimal("4"),
+        )
+        self.operatore.user_permissions.add(
+            Permission.objects.get(codename="operare_magazzino"),
+        )
+        self.client.force_login(self.operatore)
+
+        scaffali = self.client.get(
+            reverse("disponibilita_rettifica"),
+            {"ubicazione": self.destinazione.pk},
+        ).json()
+        giacenze = self.client.get(
+            reverse("disponibilita_rettifica"),
+            {"ubicazione": self.destinazione.pk, "scaffale": "S1"},
+        ).json()
+
+        self.assertEqual(scaffali["scaffali"], [{"value": "S1", "label": "S1"}])
+        self.assertEqual(giacenze["giacenze"][0]["id"], giacenza_scaffale.pk)
+        self.assertIn("quantità 4", giacenze["giacenze"][0]["label"])
+        self.assertIn("piano P2", giacenze["giacenze"][0]["label"])
 
     def test_prelievo_manuale_usa_solo_la_giacenza_selezionata(self):
         Ubicazione.objects.create(

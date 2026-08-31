@@ -152,6 +152,60 @@ class SituazioneMagazzinoTests(TestCase):
         )
         self.assertEqual(prodotto.giacenza_totale, Decimal("10"))
 
+    def test_elenco_articoli_ricerca_codice_descrizione_e_categoria(self):
+        per_codice = self.client.get(
+            reverse("elenco_articoli"), {"q": "PF-TEST"},
+        )
+        per_categoria = self.client.get(
+            reverse("elenco_articoli"), {"q": "Packaging"},
+        )
+
+        self.assertContains(per_codice, self.prodotto.descrizione)
+        self.assertNotContains(per_codice, self.imballo.codice)
+        self.assertContains(per_categoria, self.imballo.codice)
+        self.assertNotContains(per_categoria, self.prodotto.codice)
+        self.assertEqual(per_categoria.context["query"], "Packaging")
+
+    def test_elenco_articoli_ricerca_senza_risultati(self):
+        response = self.client.get(
+            reverse("elenco_articoli"), {"q": "INESISTENTE-XYZ"},
+        )
+
+        self.assertContains(response, "Nessun articolo trovato")
+
+    def test_inventario_per_posizione_tiene_separati_i_lotti(self):
+        secondo_lotto = Lotto.objects.create(
+            articolo=self.prodotto,
+            codice_lotto="PF-LOT-2",
+            tipo=Lotto.Tipo.PRODUZIONE,
+            quantita_iniziale=Decimal("2"),
+        )
+        Giacenza.objects.create(
+            lotto=secondo_lotto,
+            ubicazione=self.ubicazione_a,
+            scaffale="S1",
+            piano="P2",
+            quantita=Decimal("2"),
+        )
+        Giacenza.objects.filter(
+            lotto=self.lotto_prodotto,
+            ubicazione=self.ubicazione_a,
+        ).update(scaffale="S1", piano="P2")
+
+        response = self.client.get(reverse("situazione_magazzino"))
+
+        self.assertEqual(response.status_code, 200)
+        gruppo = next(
+            gruppo for gruppo in response.context["ubicazioni_inventario"]
+            if gruppo["ubicazione"] == self.ubicazione_a
+        )
+        lotti = [riga.lotto.codice_lotto for riga in gruppo["righe"]]
+        self.assertIn("PF-LOT", lotti)
+        self.assertIn("PF-LOT-2", lotti)
+        self.assertEqual(len([lotto for lotto in lotti if lotto.startswith("PF-LOT")]), 2)
+        self.assertContains(response, "Quantità teorica")
+        self.assertContains(response, "PF-LOT-2")
+
     def test_operatore_vede_il_pulsante_scarico_materiale(self):
         permesso = Permission.objects.get(codename="operare_magazzino")
         self.user.user_permissions.add(permesso)

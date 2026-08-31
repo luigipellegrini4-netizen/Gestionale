@@ -117,6 +117,11 @@ def _prepara_backup(contenuto):
     utenti = dict(
         get_user_model().objects.values_list("username", "pk")
     )
+    lotti_per_prelievo = {
+        record["pk"]: record.get("fields", {}).get("lotto")
+        for record in dati
+        if record.get("model") == PrelievoProduzione._meta.label_lower
+    }
     for record in dati:
         fields = record.get("fields")
         if not isinstance(fields, dict):
@@ -135,6 +140,11 @@ def _prepara_backup(contenuto):
             nome: valore for nome, valore in fields.items()
             if nome in campi_correnti
         }
+        if record["model"] == MaterialeSospesoNonConformita._meta.label_lower:
+            record["fields"].setdefault(
+                "lotto_originale",
+                lotti_per_prelievo.get(record["fields"].get("prelievo")),
+            )
         if record["model"] == TankProduzione._meta.label_lower:
             vecchio_lotto_uscita = record["fields"].pop("lotto_uscita", None)
             record["fields"].setdefault(

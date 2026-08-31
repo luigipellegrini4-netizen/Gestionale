@@ -95,4 +95,51 @@ Situazione magazzino - MIRA
     {% endfor %}
 </div>
 
+<h3>Situazione inventario per ubicazione</h3>
+<p>Prospetto dei singoli lotti ordinato per ubicazione, scaffale e piano.</p>
+
+{% for gruppo in ubicazioni_inventario %}
+<div class="card">
+    <h4>{{ gruppo.ubicazione.nome }}</h4>
+    <div class="table-container">
+        <table>
+            <thead>
+                <tr>
+                    <th>Scaffale</th>
+                    <th>Piano</th>
+                    <th>Codice articolo</th>
+                    <th>Articolo</th>
+                    <th>Lotto</th>
+                    <th>Quantità teorica</th>
+                    <th>Unità</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for giacenza in gruppo.righe %}
+                <tr>
+                    <td>{{ giacenza.scaffale|default:"—" }}</td>
+                    <td>{{ giacenza.piano|default:"—" }}</td>
+                    <td><strong>{{ giacenza.lotto.articolo.codice }}</strong></td>
+                    <td>
+                        <a href="{% url 'dettaglio_articolo' giacenza.lotto.articolo.pk %}">
+                            {{ giacenza.lotto.articolo.descrizione }}
+                        </a>
+                    </td>
+                    <td>
+                        <a href="{% url 'dettaglio_lotto' giacenza.lotto.pk %}">
+                            {{ giacenza.lotto.codice_visualizzato }}
+                        </a>
+                    </td>
+                    <td><strong>{{ giacenza.quantita }}</strong></td>
+                    <td>{{ giacenza.lotto.articolo.unita_misura }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% empty %}
+<div class="card"><p>Non sono presenti giacenze positive da inventariare.</p></div>
+{% endfor %}
+
 {% endblock %}

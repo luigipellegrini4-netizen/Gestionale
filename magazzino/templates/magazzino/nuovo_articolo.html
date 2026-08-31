@@ -75,10 +75,19 @@ Nuovo articolo
 document.addEventListener("DOMContentLoaded", function () {
     const categoria = document.getElementById("id_categoria");
     const tracciabilita = document.getElementById("id_tracciabilita_lotto");
+    const tipoPackaging = document.getElementById("id_tipo_packaging");
+    const gruppoTipoPackaging = tipoPackaging.closest(".form-group");
     function proponiTracciabilita() {
         tracciabilita.checked = !["IGIENE", "CONSUMABILI"].includes(categoria.value);
     }
+    function aggiornaTipoPackaging() {
+        const visibile = categoria.value === "PACKAGING";
+        gruppoTipoPackaging.hidden = !visibile;
+        if (!visibile) tipoPackaging.value = "";
+    }
     categoria.addEventListener("change", proponiTracciabilita);
+    categoria.addEventListener("change", aggiornaTipoPackaging);
+    aggiornaTipoPackaging();
 });
 </script>
 

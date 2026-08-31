@@ -382,42 +382,21 @@ class TrasferimentoForm(forms.Form):
 
 class ConsumoForm(forms.Form):
 
-    ricerca_lotto = forms.CharField(
+    ricerca_articolo = forms.CharField(
         required=False,
-        label="Cerca lotto",
-        widget=forms.TextInput(
-            attrs={"placeholder": "Codice lotto, codice o descrizione articolo"},
-        ),
+        label="Cerca articolo",
+        widget=forms.TextInput(attrs={"placeholder": "Codice o descrizione"}),
     )
 
-    lotto = forms.ModelChoiceField(
-        queryset=Lotto.objects.select_related(
-            "articolo",
-        ).order_by(
-            "codice_lotto",
-        ),
-        label="Lotto",
+    articolo = forms.ModelChoiceField(
+        queryset=Articolo.objects.filter(attivo=True).order_by("codice"),
+        label="Articolo da scaricare",
     )
 
-    ubicazione_origine = forms.ModelChoiceField(
-        queryset=Ubicazione.objects.filter(
-            attiva=True,
-        ).order_by(
-            "nome",
-        ),
-        label="Ubicazione origine",
-    )
-
-    scaffale_origine = forms.CharField(
-        max_length=30,
-        required=False,
-        label="Scaffale origine",
-    )
-
-    piano_origine = forms.CharField(
-        max_length=30,
-        required=False,
-        label="Piano origine",
+    giacenza = forms.ModelChoiceField(
+        queryset=Giacenza.objects.none(),
+        label="Lotto e posizione di origine",
+        empty_label="Seleziona prima un articolo",
     )
 
     quantita = forms.DecimalField(
@@ -446,13 +425,40 @@ class ConsumoForm(forms.Form):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        ricerca = (self.data.get("ricerca_lotto") or "").strip()
+        ricerca = (self.data.get("ricerca_articolo") or "").strip()
         if ricerca:
-            self.fields["lotto"].queryset = self.fields["lotto"].queryset.filter(
-                Q(codice_lotto__icontains=ricerca)
-                | Q(articolo__codice__icontains=ricerca)
-                | Q(articolo__descrizione__icontains=ricerca)
+            self.fields["articolo"].queryset = self.fields["articolo"].queryset.filter(
+                Q(codice__icontains=ricerca) | Q(descrizione__icontains=ricerca)
             )
+        articolo_id = self.data.get("articolo") or self.initial.get("articolo")
+        if articolo_id:
+            try:
+                articolo_id = int(articolo_id)
+            except (TypeError, ValueError):
+                pass
+            else:
+                self.fields["giacenza"].queryset = (
+                    Giacenza.objects.select_related("lotto__articolo", "ubicazione")
+                    .filter(
+                        lotto__articolo_id=articolo_id,
+                        quantita__gt=0,
+                        ubicazione__attiva=True,
+                    )
+                    .order_by("lotto__codice_lotto", "ubicazione__nome")
+                )
+
+    def clean(self):
+        dati = super().clean()
+        articolo = dati.get("articolo")
+        giacenza = dati.get("giacenza")
+        quantita = dati.get("quantita")
+        if articolo and giacenza and giacenza.lotto.articolo_id != articolo.pk:
+            self.add_error("giacenza", "Il lotto non appartiene all'articolo selezionato.")
+        if giacenza and quantita and quantita > giacenza.quantita:
+            self.add_error(
+                "quantita", f"Disponibilità insufficiente: massimo {giacenza.quantita}.",
+            )
+        return dati
 
 
 class GiacenzaRettificaChoiceField(forms.ModelChoiceField):
@@ -470,18 +476,18 @@ class GiacenzaRettificaChoiceField(forms.ModelChoiceField):
 
 
 class RettificaInventarioForm(forms.Form):
-    ricerca_lotto = forms.CharField(
-        required=False,
-        label="Cerca lotto",
-        widget=forms.TextInput(
-            attrs={"placeholder": "Codice lotto, codice o descrizione articolo"},
-        ),
+    ubicazione = forms.ModelChoiceField(
+        queryset=Ubicazione.objects.filter(attiva=True).order_by("nome"),
+        label="Ubicazione",
+    )
+    scaffale = forms.ChoiceField(
+        choices=(("", "Seleziona prima un'ubicazione"),),
+        label="Scaffale",
     )
     giacenza = GiacenzaRettificaChoiceField(
-        queryset=Giacenza.objects.select_related(
-            "lotto__articolo", "ubicazione",
-        ).order_by("lotto__articolo__codice", "lotto__codice_lotto", "ubicazione__nome"),
-        label="Lotto e posizione da rettificare",
+        queryset=Giacenza.objects.none(),
+        label="Lotto, quantità e piano",
+        empty_label="Seleziona prima uno scaffale",
     )
     quantita_reale = forms.DecimalField(
         max_digits=12,
@@ -498,13 +504,37 @@ class RettificaInventarioForm(forms.Form):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        ricerca = (self.data.get("ricerca_lotto") or "").strip()
-        if ricerca:
-            self.fields["giacenza"].queryset = self.fields["giacenza"].queryset.filter(
-                Q(lotto__codice_lotto__icontains=ricerca)
-                | Q(lotto__articolo__codice__icontains=ricerca)
-                | Q(lotto__articolo__descrizione__icontains=ricerca)
+        ubicazione_id = self.data.get("ubicazione") or self.initial.get("ubicazione")
+        scaffale = self.data.get("scaffale") or self.initial.get("scaffale")
+        if ubicazione_id:
+            scaffali = (
+                Giacenza.objects.filter(ubicazione_id=ubicazione_id)
+                .values_list("scaffale", flat=True).distinct().order_by("scaffale")
             )
+            self.fields["scaffale"].choices = [("", "Seleziona scaffale")] + [
+                (valore or "__VUOTO__", valore or "Senza scaffale")
+                for valore in scaffali
+            ]
+        if ubicazione_id and scaffale:
+            scaffale_db = "" if scaffale == "__VUOTO__" else scaffale
+            self.fields["giacenza"].queryset = (
+                Giacenza.objects.select_related("lotto__articolo", "ubicazione")
+                .filter(ubicazione_id=ubicazione_id, scaffale=scaffale_db)
+                .order_by("lotto__articolo__codice", "lotto__codice_lotto", "piano")
+            )
+
+    def clean(self):
+        dati = super().clean()
+        ubicazione = dati.get("ubicazione")
+        scaffale = dati.get("scaffale")
+        giacenza = dati.get("giacenza")
+        scaffale_db = "" if scaffale == "__VUOTO__" else scaffale
+        if giacenza and (
+            giacenza.ubicazione_id != getattr(ubicazione, "pk", None)
+            or giacenza.scaffale != scaffale_db
+        ):
+            self.add_error("giacenza", "Il lotto non appartiene allo scaffale selezionato.")
+        return dati
 
 
 class GiacenzaNonConformitaChoiceField(forms.ModelChoiceField):
@@ -671,28 +701,12 @@ class GestioneNonConformitaLottoForm(forms.Form):
             materiali = list(non_conformita.materiali_sospesi.select_related(
                 "prelievo__lotto__articolo"
             ))
-            primi_per_miscela = {}
             for materiale in materiali:
-                if materiale.descrizione_miscela:
-                    primi_per_miscela.setdefault(materiale.descrizione_miscela, materiale.pk)
-            campi_aggiunti = set()
-            for materiale in materiali:
-                suffisso = str(
-                    primi_per_miscela.get(materiale.descrizione_miscela, materiale.pk)
-                    if materiale.descrizione_miscela else materiale.pk
-                )
+                suffisso = str(materiale.pk)
                 self.chiavi_materiali[materiale.pk] = suffisso
-                if suffisso in campi_aggiunti:
-                    continue
-                campi_aggiunti.add(suffisso)
                 articolo = materiale.prelievo.lotto.articolo
-                etichetta_materiale = materiale.descrizione_miscela or f"{articolo.codice} — {articolo.descrizione}"
+                etichetta_materiale = f"{articolo.codice} — {articolo.descrizione}"
                 quantita_etichetta = materiale.quantita
-                if materiale.descrizione_miscela:
-                    quantita_etichetta = sum(
-                        (m.quantita for m in materiali if m.descrizione_miscela == materiale.descrizione_miscela),
-                        Decimal("0"),
-                    )
                 self.fields[f"materiale_esito_{suffisso}"] = forms.ChoiceField(
                     required=False,
                     label=f"{etichetta_materiale} ({quantita_etichetta} {articolo.unita_misura})",
@@ -1175,18 +1189,17 @@ class AperturaTankForm(forms.Form):
 
 class ControlloTankForm(forms.Form):
     gradi_brix = forms.DecimalField(
-        min_value=40,
-        max_value=45,
+        min_value=0,
         max_digits=5,
         decimal_places=2,
-        label="Gradi Brix (da 40 a 45, estremi inclusi)",
+        label="Gradi Brix (40–45 conforme; fuori intervallo NC)",
     )
     ph = forms.DecimalField(
         min_value=0,
-        max_value=4.1,
+        max_value=14,
         max_digits=4,
         decimal_places=2,
-        label="pH (massimo 4,1 incluso)",
+        label="pH (≤4,1 conforme; fino a 4,4 allerta; oltre 4,4 NC)",
     )
 
 
@@ -1733,7 +1746,22 @@ class ArticoloForm(forms.ModelForm):
         }
 
         help_texts = {
+            "codice": "Codice univoco usato nelle ricerche e nei movimenti.",
+            "nome_produzione": (
+                "Facoltativo: se vuoto viene utilizzata la descrizione."
+            ),
+            "scorta_minima": "Soglia sotto la quale l'articolo risulta sotto scorta.",
+            "tipo_packaging": "Da compilare soltanto per la categoria Packaging.",
+            "tracciabilita_lotto": (
+                "Se disattivata, MIRA genera un riferimento interno senza richiedere il lotto."
+            ),
         }
+
+    def clean(self):
+        dati = super().clean()
+        if dati.get("categoria") != Articolo.Categoria.PACKAGING:
+            dati["tipo_packaging"] = ""
+        return dati
 
 class FornitoreForm(forms.ModelForm):
     class Meta:

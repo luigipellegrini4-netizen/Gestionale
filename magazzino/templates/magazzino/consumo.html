@@ -26,7 +26,8 @@ Scarico materiale - MIRA
         {% endfor %}
     {% endif %}
 
-    <form method="post" id="consumo-form">
+    <form method="post" id="consumo-form"
+          data-disponibilita-url="{% url 'disponibilita_trasferimento' %}">
         {% csrf_token %}
 
         {{ form.as_p }}
@@ -49,28 +50,72 @@ Scarico materiale - MIRA
 
 <script>
 document.addEventListener("DOMContentLoaded", function () {
-    const ricerca = document.getElementById("id_ricerca_lotto");
-    const lotto = document.getElementById("id_lotto");
-    const opzioni = Array.from(lotto.options).map(option => ({
+    const form = document.getElementById("consumo-form");
+    const ricerca = document.getElementById("id_ricerca_articolo");
+    const articolo = document.getElementById("id_articolo");
+    const giacenza = document.getElementById("id_giacenza");
+    const quantita = document.getElementById("id_quantita");
+    const valoreIniziale = giacenza.value;
+    const opzioni = Array.from(articolo.options).map(option => ({
         value: option.value,
         text: option.textContent,
         selected: option.selected,
     }));
 
-    function filtraLotti() {
+    function filtraArticoli() {
         const termine = ricerca.value.trim().toLocaleLowerCase("it");
-        const valore = lotto.value;
-        lotto.replaceChildren();
+        const valore = articolo.value;
+        articolo.replaceChildren();
         for (const dato of opzioni) {
             if (dato.value && termine && !dato.text.toLocaleLowerCase("it").includes(termine)) continue;
             const option = new Option(dato.text, dato.value);
             option.selected = dato.value === valore || (!valore && dato.selected);
-            lotto.add(option);
+            articolo.add(option);
         }
-        if (valore && lotto.value !== valore) lotto.value = "";
+        if (valore && articolo.value !== valore) {
+            articolo.value = "";
+            caricaDisponibilita();
+        }
     }
 
-    ricerca.addEventListener("input", filtraLotti);
+    async function caricaDisponibilita() {
+        giacenza.disabled = true;
+        giacenza.innerHTML = '<option value="">Caricamento...</option>';
+        if (!articolo.value) {
+            giacenza.innerHTML = '<option value="">Seleziona prima un articolo</option>';
+            return;
+        }
+        try {
+            const url = new URL(form.dataset.disponibilitaUrl, window.location.origin);
+            url.searchParams.set("articolo", articolo.value);
+            const response = await fetch(url, {headers: {"X-Requested-With": "XMLHttpRequest"}});
+            if (!response.ok) throw new Error();
+            const dati = await response.json();
+            giacenza.innerHTML = '<option value="">Seleziona lotto e posizione</option>';
+            for (const riga of dati.disponibilita) {
+                const option = document.createElement("option");
+                option.value = riga.id;
+                option.dataset.quantita = riga.quantita;
+                option.textContent = `Lotto ${riga.lotto} — ${riga.posizione} — disponibili ${riga.quantita} ${riga.unita_misura}`;
+                if (String(riga.id) === valoreIniziale) option.selected = true;
+                giacenza.appendChild(option);
+            }
+            if (!dati.disponibilita.length) {
+                giacenza.innerHTML = '<option value="">Nessun lotto con giacenza positiva</option>';
+            }
+            giacenza.disabled = false;
+            quantita.max = giacenza.selectedOptions[0]?.dataset.quantita || "";
+        } catch {
+            giacenza.innerHTML = '<option value="">Errore nel caricamento dei lotti</option>';
+        }
+    }
+
+    ricerca.addEventListener("input", filtraArticoli);
+    articolo.addEventListener("change", caricaDisponibilita);
+    giacenza.addEventListener("change", function () {
+        quantita.max = giacenza.selectedOptions[0]?.dataset.quantita || "";
+    });
+    caricaDisponibilita();
 });
 </script>
 
