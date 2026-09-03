@@ -3,6 +3,10 @@
 {% block title %}Gestisci NC-{{ non_conformita.pk }} - MIRA{% endblock %}
 
 {% block content %}
+{% if form.documentale %}<div class="message warning">La chiusura della NC è solo documentale.
+Non modifica produzioni o giacenze. Registra separatamente i movimenti tramite
+<a href="{% url 'trasferimento' %}">Trasferimento</a> o
+<a href="{% url 'consumo' %}">Scarico materiale</a>.</div>{% endif %}
 <style>
     .nc-manage-section { border: 1px solid #d9e0e7; border-radius: 10px; padding: 1.2rem; margin-bottom: 1rem; background: #fff; }
     .nc-manage-section h3 { margin: 0 0 .25rem; }
@@ -39,10 +43,10 @@
         {% if non_conformita.quantita_per_uda %}<div><strong>Quantità per UDA</strong>{{ non_conformita.quantita_per_uda }} {{ non_conformita.lotto.articolo.unita_misura }}</div>{% endif %}
         <div><strong>Quantità totale</strong>{{ non_conformita.quantita_quarantena }} {{ non_conformita.lotto.articolo.unita_misura }}</div>
         {% endif %}
-        {% if non_conformita.batch %}
+        {% if non_conformita.batch and not form.documentale %}
         <div><strong>Produzione</strong>{{ non_conformita.produzione.articolo.codice }} — {{ non_conformita.lotto_temporaneo }}</div>
         <div><strong>Batch</strong>{{ non_conformita.batch.numero }} — {{ non_conformita.batch.get_stato_display }}</div>
-        <div><strong>Decisione operatore</strong>{% if non_conformita.produzione_puo_proseguire %}Proseguire{% else %}Sospendere RoboQbo{% endif %}</div>
+        {% if not form.documentale %}<div><strong>Decisione operatore</strong>{% if non_conformita.produzione_puo_proseguire %}Proseguire{% else %}Sospendere RoboQbo{% endif %}</div>{% endif %}
         {% endif %}
     </div>
     <p><strong>Motivo</strong><br>{{ non_conformita.motivo }}</p>
@@ -106,7 +110,7 @@
                 </div>
             </section>
         {% else %}
-            {% if non_conformita.quantita_quarantena %}
+            {% if non_conformita.quantita_quarantena and not form.documentale %}
             <section class="nc-manage-section">
                 <h3>1. Decisione sulla quarantena</h3>
                 <p class="nc-manage-intro">

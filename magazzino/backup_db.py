@@ -15,6 +15,17 @@ from .models import (
     BatchProduzione, CarrelloProduzione, NonConformitaLotto,
     LottoUscitaProduzione, MaterialeSospesoNonConformita,
 )
+from produzione_v2.models import (
+    AbilitazioneOperatore, AllocazioneOrigineUnita, AppartenenzaUnitaLotto,
+    AssegnazioneOperatore, CicloProduzione, ConsuntivoEtichettatura,
+    ConsumoMateriale, DefinizioneControllo, DipendenzaPassaggio,
+    EventoProduzione, FabbisognoMateriale, FaseProduzione, ImpegnoRisorsa,
+    LineaProduzione, LottoCommerciale, LottoLavorazione, MovimentoOutput,
+    MovimentoProduzione, NonConformita, OrdineProduzione,
+    OrigineLottoCommerciale, OutputProduzione, PassaggioLinea, RegolaControlloCiclo,
+    RilevazioneControllo, RisorsaProduzione, StazioneLavoro,
+    TipoUnitaProduzione, TurnoLinea, UnitaProduzione,
+)
 
 
 FORMATO = "MIRA_BACKUP"
@@ -29,12 +40,32 @@ MODELLI = [
     PrelievoProduzioneSemilavorato, Confezionamento,
     ConsumoConfezionamento, Inscatolamento,
     RegistroOperazione,
+    LineaProduzione, TurnoLinea, StazioneLavoro, PassaggioLinea,
+    DipendenzaPassaggio, DefinizioneControllo, TipoUnitaProduzione,
+    RisorsaProduzione, AbilitazioneOperatore, CicloProduzione,
+    RegolaControlloCiclo, OrdineProduzione, FaseProduzione, LottoLavorazione,
+    AssegnazioneOperatore, ImpegnoRisorsa, UnitaProduzione,
+    AllocazioneOrigineUnita, AppartenenzaUnitaLotto,
+    LottoCommerciale, OrigineLottoCommerciale, ConsuntivoEtichettatura,
+    RilevazioneControllo, ConsumoMateriale, FabbisognoMateriale,
+    MovimentoProduzione, OutputProduzione, MovimentoOutput,
+    NonConformita, EventoProduzione,
 ]
 MODELLI_AMMESSI = {modello._meta.label_lower for modello in MODELLI}
 MODELLI_PER_ETICHETTA = {
     modello._meta.label_lower: modello for modello in MODELLI
 }
 ORDINE_ELIMINAZIONE = [
+    EventoProduzione, ConsuntivoEtichettatura, OrigineLottoCommerciale,
+    LottoCommerciale, AppartenenzaUnitaLotto, AllocazioneOrigineUnita,
+    NonConformita, MovimentoOutput, MovimentoProduzione,
+    RilevazioneControllo, OutputProduzione, FabbisognoMateriale,
+    ConsumoMateriale, UnitaProduzione, LottoLavorazione, ImpegnoRisorsa,
+    AssegnazioneOperatore, FaseProduzione, OrdineProduzione,
+    RegolaControlloCiclo, CicloProduzione, AbilitazioneOperatore,
+    RisorsaProduzione, TipoUnitaProduzione, DefinizioneControllo,
+    DipendenzaPassaggio, PassaggioLinea, TurnoLinea,
+    StazioneLavoro, LineaProduzione,
     RegistroOperazione, MaterialeSospesoNonConformita,
     CarrelloProduzione, BatchProduzione, TankProduzione,
     LottoUscitaProduzione, NonConformitaLotto,
@@ -57,6 +88,7 @@ def svuota_dati_magazzino():
         # tutti opzionali: li sciogliamo prima della cancellazione.
         Produzione.objects.update(derivata_da=None, bloccata_da_nc=None)
         NonConformitaLotto.objects.update(produzione=None, batch=None)
+        UnitaProduzione.objects.update(origine=None)
         for modello in ORDINE_ELIMINAZIONE:
             modello.objects.all().delete()
     return conteggi
@@ -69,6 +101,18 @@ CAMPI_UTENTE = {
     BatchProduzione._meta.label_lower: ("registrato_da",),
     CarrelloProduzione._meta.label_lower: ("registrato_da",),
     NonConformitaLotto._meta.label_lower: ("aperta_da", "gestita_da"),
+    OrdineProduzione._meta.label_lower: ("creato_da",),
+    AssegnazioneOperatore._meta.label_lower: ("operatore",),
+    AbilitazioneOperatore._meta.label_lower: ("operatore",),
+    ImpegnoRisorsa._meta.label_lower: ("assegnata_da",),
+    RilevazioneControllo._meta.label_lower: ("rilevato_da",),
+    OutputProduzione._meta.label_lower: ("creato_da",),
+    NonConformita._meta.label_lower: ("aperta_da", "chiusa_da"),
+    EventoProduzione._meta.label_lower: ("operatore",),
+    LottoLavorazione._meta.label_lower: ("aperto_da", "chiuso_da"),
+    LottoCommerciale._meta.label_lower: ("chiuso_da",),
+    OrigineLottoCommerciale._meta.label_lower: ("autorizzata_da",),
+    ConsuntivoEtichettatura._meta.label_lower: ("registrato_da",),
 }
 
 
@@ -81,6 +125,13 @@ def crea_backup():
     for modello in MODELLI:
         queryset = modello.objects.all().order_by("pk")
         dati = json.loads(serializers.serialize("json", queryset))
+        if modello is EventoProduzione:
+            timestamp_completi = {
+                evento.pk: evento.registrato_il.isoformat()
+                for evento in queryset
+            }
+            for record in dati:
+                record["fields"]["registrato_il"] = timestamp_completi[record["pk"]]
         if modello._meta.label_lower in CAMPI_UTENTE:
             for record in dati:
                 for campo in CAMPI_UTENTE[modello._meta.label_lower]:
@@ -176,6 +227,7 @@ def ripristina_backup(contenuto):
             # opzionali ma PROTECT: devono essere sciolti prima di svuotare.
             Produzione.objects.update(derivata_da=None, bloccata_da_nc=None)
             NonConformitaLotto.objects.update(produzione=None, batch=None)
+            UnitaProduzione.objects.update(origine=None)
             for modello in ORDINE_ELIMINAZIONE:
                 modello.objects.all().delete()
             for oggetto in oggetti:

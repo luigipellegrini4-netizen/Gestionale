@@ -1,0 +1,8 @@
+{% extends "magazzino/base.html" %}
+{% block title %}Ciclo {{ ciclo }}{% endblock %}
+{% block content %}
+<div class="page-header"><div><h2>{{ ciclo.prodotto.nome_per_produzione }}</h2><p>Linea {{ ciclo.linea.nome }} · Ricetta {{ ciclo.ricetta.nome }} v{{ ciclo.ricetta.versione }} · Ciclo v{{ ciclo.versione }}</p></div><a class="btn btn-secondary" href="{% url 'produzione_v2:dashboard' %}">Dashboard V2</a></div>
+<div class="card"><h3>Parametri produttivi</h3><p>Quantità di riferimento: {{ ciclo.quantita_riferimento }} {{ ciclo.prodotto.unita_misura }} · Resa ammessa: {{ ciclo.resa_minima_percentuale|default:"—" }}% – {{ ciclo.resa_massima_percentuale|default:"—" }}%</p></div>
+<div class="card"><h3>Specifiche di controllo del prodotto</h3><p>Questi limiti sostituiscono, per il solo ciclo, le regole generali definite sulla stazione.</p>{% if regole %}<div class="table-container"><table><thead><tr><th>Stazione</th><th>Controllo</th><th>Limiti</th><th>Stato</th></tr></thead><tbody>{% for regola in regole %}<tr><td>{{ regola.definizione.stazione.nome }}</td><td>{{ regola.definizione.nome }}</td><td>{{ regola.regole }}</td><td>{% if regola.attiva %}Attiva{% else %}Disattivata{% endif %}</td></tr>{% endfor %}</tbody></table></div>{% else %}<p>Nessuna specifica: vengono applicate le regole generali delle stazioni.</p>{% endif %}</div>
+{% if perms.produzione_v2.configurare_produzione_v2 %}<div class="form-card"><h3>Aggiungi specifica</h3><form method="post">{% csrf_token %}{{ form.as_p }}<button class="btn" type="submit">Salva limiti</button></form></div>{% endif %}
+{% endblock %}

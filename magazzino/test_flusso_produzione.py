@@ -1,7 +1,7 @@
 from datetime import date, time
 from decimal import Decimal
 
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
 from django.db.models import Sum
@@ -16,6 +16,8 @@ from .models import Articolo, BatchProduzione, CarrelloProduzione, Giacenza, Lot
 from .services import apri_non_conformita_batch, calcola_quantita_teorica_ricetta, genera_codice_lotto_per_produzione, genera_codice_lotto_produzione, genera_codice_lotto_ripresa, proponi_prelievi_articolo, registra_controlli_tank, riepilogo_materiali_ricetta, risolvi_non_conformita_batch, risolvi_nc_produzione_derivata
 
 
+# Regressione del motore automatico conservato come fallback.
+@override_settings(NC_DOCUMENTALI=False)
 class FlussoProduzioneTreFasiTests(TestCase):
     @classmethod
     def setUpTestData(cls):
@@ -199,6 +201,28 @@ class FlussoProduzioneTreFasiTests(TestCase):
         })
         self.assertFalse(form.is_valid())
         self.assertIn("produzione_puo_proseguire", form.errors)
+
+    @override_settings(NC_DOCUMENTALI=True)
+    def test_nc_documentale_non_blocca_batch_ne_crea_derivate(self):
+        form = BatchProduzioneForm(data={
+            "ora_inizio": "10:00", "ora_fine": "10:20",
+            "esito_conformita": "NC", "note": "Fuori parametro",
+        })
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertNotIn("produzione_puo_proseguire", form.fields)
+        batch = BatchProduzione.objects.create(
+            produzione=self.produzione, numero=1, esito_conformita="NC",
+        )
+        stato = self.produzione.stato_roboqubo
+        nc = apri_non_conformita_batch(batch, False, "Segnalazione", self.operatore)
+        batch.refresh_from_db()
+        self.produzione.refresh_from_db()
+        self.assertEqual(batch.esito_conformita, "NC")
+        self.assertEqual(batch.stato, BatchProduzione.Stato.CONFORME)
+        self.assertEqual(self.produzione.stato_roboqubo, stato)
+        self.assertFalse(nc.produzioni_bloccate.exists())
+        self.assertFalse(nc.materiali_sospesi.exists())
+        self.assertFalse(Movimento.objects.exists())
 
     def test_form_batch_nc_accetta_orari_non_compilati(self):
         form = BatchProduzioneForm(data={
@@ -550,6 +574,33 @@ class FlussoProduzioneTreFasiTests(TestCase):
         derivata.refresh_from_db()
         self.assertEqual(derivata.fase, Produzione.Fase.INVASETTAMENTO)
         self.assertEqual(derivata.stato_roboqubo, Produzione.StatoRoboqubo.CONCLUSA)
+
+    def test_data_nuova_produzione_formato_browser(self):
+        self.assertIn(f'value="{timezone.localdate():%Y-%m-%d}"', str(ProduzioneForm()["data_produzione"]))
+
+    @override_settings(NC_DOCUMENTALI=True)
+    def test_chiusura_roboqbo_con_batch_non_assegnati_e_tank_aperto(self):
+        self.produzione.numero_batch_previsti = 2
+        self.produzione.fase = Produzione.Fase.ROBOQUBO
+        self.produzione.save()
+        tank = TankProduzione.objects.create(produzione=self.produzione, numero=1, numero_batch=1)
+        BatchProduzione.objects.create(produzione=self.produzione, numero=1, tank=tank, esito_conformita="C")
+        batch = BatchProduzione.objects.create(produzione=self.produzione, numero=2, esito_conformita="C")
+        self.operatore.user_permissions.add(Permission.objects.get(codename="operare_roboqubo"))
+        self.client.force_login(self.operatore)
+        url = reverse("gestione_produzione", args=[self.produzione.pk])
+        self.client.post(url, {"azione": "chiudi_roboqubo"})
+        self.produzione.refresh_from_db()
+        self.assertEqual(self.produzione.stato_roboqubo, Produzione.StatoRoboqubo.CONCLUSA)
+        page = self.client.get(url)
+        self.assertContains(page, "crea_tank_da_batch")
+        self.assertContains(page, "controlla_tank")
+        self.client.post(url, {"azione": "controlla_tank", "gradi_brix": "42", "ph": "4.0"})
+        tank.refresh_from_db()
+        self.assertIsNotNone(tank.data_ora_controlli)
+        self.client.post(url, {"azione": "crea_tank_da_batch", "batch_ids": [batch.pk]})
+        batch.refresh_from_db()
+        self.assertIsNotNone(batch.tank_id)
 
     def test_form_carrello_accetta_esiti_nc_e_na(self):
         tank = TankProduzione.objects.create(

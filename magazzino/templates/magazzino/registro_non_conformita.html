@@ -21,7 +21,7 @@
         <td><a href="{% url 'dettaglio_non_conformita' nc.pk %}"><strong>NC-{{ nc.pk }}</strong></a></td><td>{{ nc.data_apertura|date:"d/m/Y H:i" }}<br><small>{{ nc.aperta_da.get_username }}</small></td>
         <td>{{ nc.get_stato_display }}</td><td>{{ nc.get_ambito_display }}</td><td>{{ nc.get_tipo_nc_display }}</td><td>{{ nc.motivo|truncatechars:100 }}</td>
         <td>{% if nc.lotto %}<a href="{% url 'dettaglio_lotto' nc.lotto.pk %}">{{ nc.lotto.codice_lotto }}</a>{% elif nc.produzione %}<a href="{% url 'dettaglio_gestione_produzione' nc.produzione.pk %}">{{ nc.lotto_temporaneo }} · Batch {{ nc.batch.numero }}</a>{% else %}—{% endif %}</td>
-        <td><a class="btn btn-secondary" href="{% url 'dettaglio_non_conformita' nc.pk %}">Dettaglio</a> {% if nc.stato != "CHIUSA" and perms.magazzino.gestire_non_conformita %}<a class="btn" href="{% url 'gestisci_non_conformita' nc.pk %}">Gestisci</a>{% endif %}</td>
+        <td><a class="btn btn-secondary" href="{% url 'dettaglio_non_conformita' nc.pk %}">Dettaglio</a> {% if nc.stato == "BOZZA" and perms.magazzino.operare_magazzino %}<a class="btn" href="{% url 'modifica_bozza_non_conformita' nc.pk %}">Riprendi bozza</a>{% elif nc.stato != "CHIUSA" and perms.magazzino.gestire_non_conformita %}<a class="btn" href="{% url 'gestisci_non_conformita' nc.pk %}">Gestisci</a>{% endif %}</td>
     </tr>{% empty %}<tr><td colspan="8">Nessuna non conformità trovata.</td></tr>{% endfor %}
     </tbody>
 </table></div>

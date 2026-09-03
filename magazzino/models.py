@@ -456,6 +456,7 @@ class NonConformitaLotto(models.Model):
 
     class Stato(models.TextChoices):
         APERTA = "APERTA", "Aperta"
+        BOZZA = "BOZZA", "Bozza"
         IN_LAVORAZIONE = "IN_LAVORAZIONE", "In lavorazione"
         CHIUSA = "CHIUSA", "Chiusa"
 

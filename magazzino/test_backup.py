@@ -1,4 +1,6 @@
 import json
+from io import StringIO
+from django.core.management import call_command
 from decimal import Decimal
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -13,9 +15,36 @@ from .models import (
     Lotto, MaterialeSospesoNonConformita, Movimento, NonConformitaLotto,
     PrelievoProduzione, Produzione, TankProduzione, Ubicazione,
 )
+from produzione_v2.models import (
+    EventoProduzione, LineaProduzione, OrdineProduzione, PassaggioLinea,
+    StazioneLavoro,
+)
+from produzione_v2.services import prepara_ordine
 
 
 class BackupDatabaseTests(TestCase):
+    def test_pulizia_selettiva_preserva_magazzino_e_backup_recuperabile(self):
+        from .management.commands.pulisci_produzioni_prova import impronta_conservati
+        linea = LineaProduzione.objects.create(codice="PULIZIA", nome="Linea")
+        stazione = StazioneLavoro.objects.create(codice="PULIZIA", nome="Stazione")
+        PassaggioLinea.objects.create(linea=linea, stazione=stazione, ordine=1)
+        ordine = OrdineProduzione.objects.create(
+            codice="PROVA", linea=linea, prodotto=self.articolo,
+            quantita_pianificata=5, creato_da=self.operatore,
+        )
+        prepara_ordine(ordine, self.operatore)
+        prima = impronta_conservati()
+        with TemporaryDirectory() as cartella, override_settings(BASE_DIR=cartella):
+            call_command("pulisci_produzioni_prova", stdout=StringIO())
+            self.assertTrue(OrdineProduzione.objects.exists())
+            call_command("pulisci_produzioni_prova", conferma=True, stdout=StringIO())
+            self.assertFalse(OrdineProduzione.objects.exists())
+            self.assertFalse(EventoProduzione.objects.exists())
+            self.assertEqual(impronta_conservati(), prima)
+            backup = next((Path(cartella) / "backup_pre_pulizia").glob("*.json"))
+            ripristina_backup(backup.read_bytes())
+            self.assertTrue(OrdineProduzione.objects.filter(codice="PROVA").exists())
+
     @classmethod
     def setUpTestData(cls):
         cls.superuser = get_user_model().objects.create_superuser(
@@ -104,6 +133,31 @@ class BackupDatabaseTests(TestCase):
         movimento = Movimento.objects.get()
         self.assertEqual(movimento.eseguito_da.username, "backup-operatore")
         self.assertEqual(Giacenza.objects.get().quantita, Decimal("7"))
+
+    def test_round_trip_include_produzione_v2_e_catena_audit(self):
+        linea = LineaProduzione.objects.create(codice="BACKUP-V2", nome="Linea backup V2")
+        stazione = StazioneLavoro.objects.create(
+            codice="ST-BACKUP-V2", nome="Stazione backup V2",
+            tipo=StazioneLavoro.Tipo.TRASFORMAZIONE,
+        )
+        PassaggioLinea.objects.create(linea=linea, stazione=stazione, ordine=1)
+        ordine = OrdineProduzione.objects.create(
+            codice="OP-BACKUP-V2", linea=linea, prodotto=self.articolo,
+            quantita_pianificata=Decimal("5"), creato_da=self.operatore,
+        )
+        prepara_ordine(ordine, self.operatore)
+        contenuto = crea_backup().encode("utf-8")
+        OrdineProduzione.objects.filter(pk=ordine.pk).update(codice="ALTERATO-V2")
+
+        with TemporaryDirectory() as cartella, override_settings(BASE_DIR=cartella):
+            ripristina_backup(contenuto)
+
+        ripristinato = OrdineProduzione.objects.get(codice="OP-BACKUP-V2")
+        self.assertEqual(ripristinato.creato_da.username, "backup-operatore")
+        self.assertEqual(ripristinato.fasi.get().stazione, stazione)
+        valida, numero = EventoProduzione.verifica_catena(ripristinato)
+        self.assertTrue(valida)
+        self.assertEqual(numero, 1)
 
     def test_backup_non_valido_non_modifica_i_dati(self):
         with self.assertRaisesMessage(ValueError, "Formato o versione"):

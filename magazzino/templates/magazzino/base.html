@@ -4,10 +4,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <link rel="stylesheet" href="{% static 'magazzino/style.css' %}">
+    <link rel="stylesheet" href="{% static 'magazzino/style.css' %}?v=20260903">
+    {% block extra_head %}{% endblock %}
     <title>{% block title %}MIRA{% endblock %}</title>
 </head>
-<body>
+<body class="{% block body_class %}{% endblock %}">
     <header class="site-header">
         <a href="{% url 'home' %}" class="brand" aria-label="MIRA - Home">
             <img
@@ -101,6 +102,10 @@
                 <div class="menu-title">
                     PRODUZIONE
                 </div>
+
+                <a href="{% url 'elenco_produzioni' %}">Produzione</a>
+
+                <div class="menu-divider" role="separator"></div>
 
                 {% if perms.magazzino.operare_magazzino %}
                     <a href="{% url 'nuova_produzione_semilavorato' %}">

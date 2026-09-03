@@ -284,6 +284,8 @@ button:hover {
 
 .layout main {
     flex: 1;
+    margin: 0;
+    max-width: none;
 }
 
 

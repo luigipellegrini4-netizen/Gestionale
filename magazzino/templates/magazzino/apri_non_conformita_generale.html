@@ -23,8 +23,8 @@
 <div class="form-card nc-form">
     <div class="message warning">
         I campi contrassegnati con <strong>*</strong> sono obbligatori. Il lotto è
-        facoltativo. La posizione può essere annotata senza quarantena; unità e
-        quantità servono soltanto se il materiale deve essere reso non disponibile.
+        facoltativo. In modalità documentale nessun dato inserito blocca la produzione
+        o modifica le giacenze. Spostamenti e scarichi vanno registrati manualmente.
     </div>
     {% if form.non_field_errors %}{% for error in form.non_field_errors %}<div class="message error">{{ error }}</div>{% endfor %}{% endif %}
     <form method="post">
@@ -54,6 +54,8 @@
 
         <section class="nc-section">
             <h3>2. Lotto coinvolto <span class="nc-optional">— facoltativo</span></h3>
+            <p>{{ form.produzione.label_tag }}{{ form.produzione }}{{ form.produzione.errors }}</p>
+            <p>{{ form.batch.label_tag }}{{ form.batch }}{{ form.batch.errors }}</p>
             <p class="nc-section-intro">Puoi collegare la NC a un lotto senza metterlo in quarantena.</p>
             <div class="nc-grid">
                 <div class="nc-field nc-field-wide">
@@ -75,10 +77,12 @@
         </section>
 
         <section class="nc-section nc-quarantine" id="quarantena-section">
-            <h3>3. Quarantena <span class="nc-optional">— facoltativa</span></h3>
+            <h3>3. Quantità interessata <span class="nc-optional">— facoltativa</span></h3>
             <p class="nc-section-intro">
-                Se vuoi mettere materiale in quarantena, indica unità e quantità.
-                La quantità corrispondente verrà sottratta dalla disponibilità.
+                {% if form.documentale %}Unità e quantità sono solo annotazioni.
+                La disponibilità resta invariata: usa Trasferimento per gli spostamenti
+                e Scarico materiale per lo scarto definitivo.
+                {% else %}La quantità indicata viene sottratta dalla disponibilità.{% endif %}
             </p>
             <div class="nc-grid">
                 <div class="nc-field">
@@ -92,7 +96,10 @@
             </div>
         </section>
         <div class="form-actions">
-            <button type="submit" class="btn btn-danger">Apri non conformità</button>
+            <a href="{% url 'trasferimento' %}" class="btn btn-secondary">Trasferimento</a>
+            <a href="{% url 'consumo' %}" class="btn btn-secondary">Scarico materiale</a>
+            <button type="submit" name="azione" value="bozza" formnovalidate class="btn btn-secondary">Salva bozza</button>
+            <button type="submit" name="azione" value="apri" class="btn btn-danger">Apri non conformità</button>
             <a href="{% url 'registro_non_conformita' %}" class="btn btn-secondary">Registro NC</a>
         </div>
     </form>

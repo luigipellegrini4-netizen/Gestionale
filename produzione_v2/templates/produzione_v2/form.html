@@ -1,0 +1,6 @@
+{% extends "magazzino/base.html" %}
+{% block title %}{{ titolo }}{% endblock %}
+{% block content %}
+<div class="page-header"><div><h2>{{ titolo }}</h2><p>Configurazione del nuovo motore produttivo.</p></div></div>
+<div class="form-card"><form method="post">{% csrf_token %}{{ form.as_p }}<div class="form-actions"><button class="btn" type="submit">Salva</button><a class="btn btn-secondary" href="{% url 'produzione_v2:dashboard' %}">Annulla</a></div></form></div>
+{% endblock %}

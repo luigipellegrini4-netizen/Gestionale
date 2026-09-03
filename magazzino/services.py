@@ -2,6 +2,7 @@ from decimal import Decimal, ROUND_CEILING, ROUND_DOWN, ROUND_HALF_UP
 from datetime import date, timedelta
 
 from django.db import transaction
+from django.conf import settings
 from django.db.models import Q
 from django.utils import timezone
 
@@ -49,19 +50,27 @@ def riallinea_quantita_produzione(produzione, numero_batch=None):
 
 
 def riepilogo_materiali_ricetta(produzione):
-    """Materiali attribuiti alla lavorazione corrente: ricetta × batch presenti."""
     ricetta = produzione.articolo.ricette.filter(attiva=True).first()
     if ricetta is None:
         return []
-    numero_batch = Decimal(produzione.numero_batch_previsti)
+
+    numero_batch = produzione.numero_batch_previsti
+
+    if produzione.stato_roboqubo == Produzione.StatoRoboqubo.CONCLUSA:
+        numero_batch = produzione.batch.filter(
+            tank__isnull=False,
+            tank__annullato=False,
+            tank__produzione_id=produzione.pk,
+        ).count()
+
     return [
         {
             "articolo": riga.articolo,
             "quantita_per_batch": riga.quantita,
-            "numero_batch": produzione.numero_batch_previsti,
-            "quantita_totale": (riga.quantita * numero_batch).quantize(
-                Decimal("0.000001")
-            ),
+            "numero_batch": numero_batch,
+            "quantita_totale": (
+                riga.quantita * Decimal(numero_batch)
+            ).quantize(Decimal("0.000001")),
         }
         for riga in ricetta.righe.select_related("articolo").filter(
             ingrediente_prodotto=True,
@@ -94,7 +103,14 @@ def concludi_invasettamento_senza_nuovo_lotto(produzione):
     quantita_ottenuta = sum(
         (uscita.quantita_ottenuta_kg or Decimal("0") for uscita in uscite), Decimal("0"),
     )
-    quantita_teorica = calcola_quantita_teorica_ricetta(produzione)
+    batch_utilizzati = produzione.batch.filter(
+        tank__in=tank_correnti,
+    ).count()
+
+    quantita_teorica_kg = calcola_quantita_teorica_ricetta(
+        produzione,
+        numero_batch=batch_utilizzati,
+    )
     # Il riferimento riepilogativo è valorizzato soltanto quando il lotto è
     # realmente unico; con più uscite la fonte è l'elenco lotti_uscita.
     produzione.lotto = uscite[0].lotto if len(uscite) == 1 else None
@@ -153,7 +169,7 @@ def conferma_lotto_parziale_produzione(
     scarti = int(pezzi_difettosi_finali)
     peso = Decimal(str(peso_netto_vasetto_g))
     quantita_ottenuta = (Decimal(quantita_prodotta + scarti) * peso / Decimal("1000")).quantize(Decimal("0.001"))
-    batch_nei_tank = sum((t.numero_batch for t in tank), 0)
+    batch_nei_tank = produzione.batch.filter(tank__in=tank).count()
     quantita_teorica = calcola_quantita_teorica_ricetta(
         produzione, numero_batch=batch_nei_tank,
     )
@@ -237,6 +253,14 @@ def conferma_lotto_parziale_produzione(
 
 @transaction.atomic
 def apri_non_conformita_batch(batch, produzione_puo_proseguire, motivo, operatore):
+    if settings.NC_DOCUMENTALI:
+        return NonConformitaLotto.objects.create(
+            produzione=batch.produzione, batch=batch,
+            numero_batch_origine=batch.numero,
+            lotto_temporaneo=batch.produzione.lotto_provvisorio,
+            motivo=motivo, aperta_da=operatore,
+            note_apertura="Segnalazione documentale: nessun blocco o movimento automatico.",
+        )
     batch = BatchProduzione.objects.select_for_update().select_related("produzione").get(pk=batch.pk)
     produzione = Produzione.objects.select_for_update().get(pk=batch.produzione_id)
     if batch.esito_conformita != "NC":
@@ -473,6 +497,8 @@ def apri_non_conformita_batch(batch, produzione_puo_proseguire, motivo, operator
 
 @transaction.atomic
 def risolvi_non_conformita_batch(non_conformita, esito_batch, decisioni_materiali, responsabile):
+    if settings.NC_DOCUMENTALI:
+        raise ValueError("Gestione documentale: chiudere la NC dal registro; effettuare i movimenti manualmente.")
     nc = NonConformitaLotto.objects.select_for_update().select_related("batch", "produzione").get(
         pk=non_conformita.pk,
     )
@@ -601,6 +627,8 @@ def risolvi_non_conformita_batch(non_conformita, esito_batch, decisioni_material
 def risolvi_nc_produzione_derivata(
     non_conformita, esito_batch, decisioni_materiali, responsabile,
 ):
+    if settings.NC_DOCUMENTALI:
+        raise ValueError("Gestione documentale: nessun reintegro o scarto automatico della produzione.")
     nc = NonConformitaLotto.objects.select_for_update().select_related("batch").get(
         pk=non_conformita.pk,
     )
@@ -1253,8 +1281,9 @@ def apri_non_conformita_lotto(
             "Le UDA richieste superano la giacenza disponibile nella posizione."
         )
 
-    giacenza.quantita -= quantita_quarantena
-    giacenza.save(update_fields=["quantita"])
+    if not settings.NC_DOCUMENTALI:
+        giacenza.quantita -= quantita_quarantena
+        giacenza.save(update_fields=["quantita"])
     non_conformita = NonConformitaLotto.objects.create(
         lotto=lotto,
         ubicazione_origine=giacenza.ubicazione,
@@ -1270,6 +1299,8 @@ def apri_non_conformita_lotto(
         ambito=ambito,
         tipo_nc=tipo_nc,
     )
+    if settings.NC_DOCUMENTALI:
+        return non_conformita
     Movimento.objects.create(
         tipo=Movimento.Tipo.QUARANTENA,
         lotto=lotto,
@@ -1305,6 +1336,14 @@ def gestisci_non_conformita_lotto(
         raise ValueError("Il responsabile qualità è obbligatorio.")
     if not (decisione or "").strip():
         raise ValueError("La motivazione della decisione è obbligatoria.")
+
+    if settings.NC_DOCUMENTALI:
+        non_conformita.stato = NonConformitaLotto.Stato.CHIUSA
+        non_conformita.decisione = decisione.strip()
+        non_conformita.gestita_da = responsabile
+        non_conformita.data_chiusura = timezone.now()
+        non_conformita.save(update_fields=["stato", "decisione", "gestita_da", "data_chiusura"])
+        return non_conformita
 
     unita = non_conformita.unita_quarantena or "UDA"
     scartate = Decimal(str(

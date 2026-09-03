@@ -4,6 +4,8 @@ from . import views
 
 
 urlpatterns = [
+    path("non-conformita/<int:pk>/bozza/", views.apri_non_conformita_generale,
+         name="modifica_bozza_non_conformita"),
     path(
         "non-conformita/nuova/",
         views.apri_non_conformita_generale,

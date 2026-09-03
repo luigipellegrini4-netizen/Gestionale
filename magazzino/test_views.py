@@ -4,7 +4,7 @@ from decimal import Decimal
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
 from django.db import connection
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 
@@ -260,6 +260,7 @@ class SituazioneMagazzinoTests(TestCase):
         nc.refresh_from_db()
         self.assertEqual(nc.stato, NonConformitaLotto.Stato.IN_LAVORAZIONE)
 
+    @override_settings(NC_DOCUMENTALI=False)
     def test_apertura_generale_ricerca_lotto_e_mette_uda_in_quarantena(self):
         giacenza = Giacenza.objects.create(
             lotto=self.lotto_imballo,
@@ -299,6 +300,27 @@ class SituazioneMagazzinoTests(TestCase):
         self.assertEqual(nc.numero_uda_quarantena, 2)
         self.assertEqual(nc.quantita_quarantena, Decimal("2.5"))
         self.assertEqual(giacenza.quantita, Decimal("7.5"))
+
+    @override_settings(NC_DOCUMENTALI=True)
+    def test_nc_bozza_ripresa_e_apertura_senza_duplicati(self):
+        self.user.user_permissions.add(Permission.objects.get(codename="operare_magazzino"))
+        self.client.force_login(self.user)
+        data = {"ambito": "PRODUZIONE", "tipo_nc": "INTERNO", "azione": "bozza", "motivo": ""}
+        response = self.client.post(reverse("apri_non_conformita_generale"), data)
+        self.assertEqual(response.status_code, 302)
+        nc = NonConformitaLotto.objects.get(stato="BOZZA")
+        url = reverse("modifica_bozza_non_conformita", args=[nc.pk])
+        self.assertEqual(self.client.get(url).status_code, 200)
+        data["azione"] = "apri"
+        self.assertEqual(self.client.post(url, data).status_code, 200)
+        nc.refresh_from_db()
+        self.assertEqual(nc.stato, "BOZZA")
+        data["motivo"] = "Descrizione completata"
+        self.assertEqual(self.client.post(url, data).status_code, 302)
+        nc.refresh_from_db()
+        self.assertEqual(nc.stato, "APERTA")
+        self.assertEqual(nc.motivo, data["motivo"])
+        self.assertEqual(self.client.get(url).status_code, 404)
 
     def test_apertura_generale_collega_lotto_senza_quarantena(self):
         self.user.user_permissions.add(
@@ -413,6 +435,7 @@ class SituazioneMagazzinoTests(TestCase):
         self.assertContains(response, "Unità di acquisto totali")
         self.assertContains(response, "Peso della singola unità di acquisto")
 
+    @override_settings(NC_DOCUMENTALI=False)
     def test_apertura_e_gestione_non_conformita_da_dettaglio_lotto(self):
         giacenza = Giacenza.objects.create(
             lotto=self.lotto_imballo,

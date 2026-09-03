@@ -31,7 +31,7 @@
         {% csrf_token %}
         {{ form.as_p }}
         <div class="form-actions">
-            <button type="submit" class="btn btn-danger">Metti in quarantena</button>
+            <button type="submit" class="btn btn-danger">{% if form.documentale %}Apri non conformità{% else %}Metti in quarantena{% endif %}</button>
             <a href="{% url 'dettaglio_lotto' lotto.pk %}" class="btn btn-secondary">Annulla</a>
         </div>
     </form>

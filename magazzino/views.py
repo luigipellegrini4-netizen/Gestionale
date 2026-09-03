@@ -2,6 +2,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 
 from django.contrib import messages
+from django.conf import settings
 from django.contrib.auth.decorators import permission_required, user_passes_test
 from django.db import transaction
 from django.db.models import Count, F, OuterRef, Q, Subquery, Sum
@@ -540,11 +541,15 @@ def ricerca_lotti(request):
 
 
 @permission_required("magazzino.operare_magazzino", raise_exception=True)
-def apri_non_conformita_generale(request):
+def apri_non_conformita_generale(request, pk=None):
+    istanza = None
+    if pk is not None:
+        istanza = get_object_or_404(NonConformitaLotto, pk=pk, stato=NonConformitaLotto.Stato.BOZZA)
+    bozza = request.method == "POST" and request.POST.get("azione") == "bozza"
     if request.method == "POST":
-        form = AperturaNonConformitaGeneraleForm(request.POST)
+        form = AperturaNonConformitaGeneraleForm(request.POST, instance=istanza, bozza=bozza)
         if form.is_valid():
-            if form.cleaned_data["giacenza"] and form.cleaned_data["quantita_quarantena_input"]:
+            if not settings.NC_DOCUMENTALI and not bozza and form.cleaned_data["giacenza"] and form.cleaned_data["quantita_quarantena_input"]:
                 try:
                     non_conformita = apri_non_conformita_lotto(
                         lotto=form.cleaned_data["lotto"],
@@ -562,8 +567,19 @@ def apri_non_conformita_generale(request):
                     non_conformita = None
             else:
                 non_conformita = form.save(commit=False)
-                non_conformita.aperta_da = request.user
+                if not non_conformita.pk:
+                    non_conformita.aperta_da = request.user
+                non_conformita.stato = NonConformitaLotto.Stato.BOZZA if bozza else NonConformitaLotto.Stato.APERTA
                 giacenza = form.cleaned_data.get("giacenza")
+                unita = form.cleaned_data.get("unita_quarantena") or ""
+                quantita = form.cleaned_data.get("quantita_quarantena_input")
+                non_conformita.unita_quarantena = unita
+                non_conformita.quantita_per_uda = non_conformita.lotto.quantita_singola_uda if non_conformita.lotto_id else None
+                non_conformita.numero_uda_quarantena = int(quantita) if unita == "UDA" and quantita else None
+                non_conformita.quantita_quarantena = (quantita * non_conformita.quantita_per_uda if unita == "UDA" else quantita) if quantita else None
+                non_conformita.ubicazione_origine = None
+                non_conformita.scaffale_origine = ""
+                non_conformita.piano_origine = ""
                 if giacenza is not None:
                     non_conformita.ubicazione_origine = giacenza.ubicazione
                     non_conformita.scaffale_origine = giacenza.scaffale
@@ -575,13 +591,21 @@ def apri_non_conformita_generale(request):
                     "magazzino/apri_non_conformita_generale.html",
                     {"form": form},
                 )
-            messages.warning(
-                request,
-                f"Non conformità NC-{non_conformita.pk} aperta correttamente.",
-            )
+            non_conformita.produzione = form.cleaned_data.get("produzione")
+            non_conformita.batch = form.cleaned_data.get("batch")
+            non_conformita.save(update_fields=["produzione", "batch"])
+            messages.warning(request, f"Non conformità NC-{non_conformita.pk} " + ("salvata in bozza. " if bozza else "registrata. ")
+                + ("Nessun blocco o movimento automatico. Usa Trasferimento o Scarico per i materiali."
+                   if settings.NC_DOCUMENTALI else ""))
             return redirect("registro_non_conformita")
     else:
-        form = AperturaNonConformitaGeneraleForm()
+        initial = {}
+        if istanza:
+            giacenza = Giacenza.objects.filter(lotto=istanza.lotto, ubicazione=istanza.ubicazione_origine,
+                scaffale=istanza.scaffale_origine, piano=istanza.piano_origine).first()
+            initial = {"giacenza": giacenza, "unita_quarantena": istanza.unita_quarantena,
+                "quantita_quarantena_input": istanza.numero_uda_quarantena if istanza.unita_quarantena == "UDA" else istanza.quantita_quarantena}
+        form = AperturaNonConformitaGeneraleForm(instance=istanza, initial=initial)
     return render(
         request,
         "magazzino/apri_non_conformita_generale.html",
@@ -726,8 +750,10 @@ def apri_non_conformita(request, pk):
             else:
                 messages.warning(
                     request,
-                    f"Non conformità NC-{non_conformita.pk} aperta: "
-                    f"{non_conformita.numero_uda_quarantena} UDA in quarantena.",
+                    f"Non conformità NC-{non_conformita.pk} aperta: " +
+                    ("nessun movimento automatico. Usare Trasferimento o Scarico materiale."
+                     if settings.NC_DOCUMENTALI else
+                     f"{non_conformita.numero_uda_quarantena} UDA in quarantena."),
                 )
                 return redirect("dettaglio_lotto", pk=lotto.pk)
     else:
@@ -751,6 +777,8 @@ def gestisci_non_conformita(request, pk):
     if non_conformita.stato == NonConformitaLotto.Stato.CHIUSA:
         messages.info(request, "La non conformità è già stata chiusa.")
         return redirect("registro_non_conformita")
+    if non_conformita.stato == NonConformitaLotto.Stato.BOZZA:
+        return redirect("modifica_bozza_non_conformita", pk=non_conformita.pk)
     if request.method == "POST":
         form = GestioneNonConformitaLottoForm(
             request.POST, non_conformita=non_conformita
@@ -786,7 +814,12 @@ def gestisci_non_conformita(request, pk):
                 )
             else:
                 try:
-                    if non_conformita.batch_id:
+                    if settings.NC_DOCUMENTALI:
+                        non_conformita.stato = NonConformitaLotto.Stato.CHIUSA
+                        non_conformita.decisione = form.cleaned_data.get("decisione", "")
+                        non_conformita.data_chiusura = timezone.now()
+                        non_conformita.save(update_fields=["stato", "decisione", "data_chiusura"])
+                    elif non_conformita.batch_id:
                         decisioni_materiali = {}
                         for materiale in non_conformita.materiali_sospesi.all():
                             suffisso = form.chiavi_materiali.get(materiale.pk, str(materiale.pk))
@@ -2260,7 +2293,7 @@ def gestione_produzione(request, pk):
         "chiudi_preparazione", "chiudi_preparazione_manuale",
     }:
         if (
-            produzione.bloccata_da_nc_id
+            not settings.NC_DOCUMENTALI and produzione.bloccata_da_nc_id
             and produzione.bloccata_da_nc.stato != NonConformitaLotto.Stato.CHIUSA
         ):
             messages.error(
@@ -2343,7 +2376,7 @@ def gestione_produzione(request, pk):
                             registrato_da=request.user, **batch_form.cleaned_data,
                         )
                     nc = None
-                    if batch.esito_conformita == "NC":
+                    if batch.esito_conformita == "NC" and not settings.NC_DOCUMENTALI:
                         nc = apri_non_conformita_batch(
                             batch=batch,
                             produzione_puo_proseguire=(puo_proseguire == "SI"),
@@ -2353,7 +2386,12 @@ def gestione_produzione(request, pk):
             except ValueError as errore:
                 batch_form.add_error(None, str(errore))
             else:
-                if nc is not None:
+                if batch.esito_conformita == "NC" and settings.NC_DOCUMENTALI:
+                    messages.warning(request,
+                        "Batch registrato con esito NON CONFORME. Compila la segnalazione tramite "
+                        "Apri non conformità. Nessuna fermata o movimentazione automatica: "
+                        "l'operatore decide come procedere.")
+                elif nc is not None:
                     messages.warning(
                         request,
                         (
@@ -2417,9 +2455,9 @@ def gestione_produzione(request, pk):
             messages.error(request, "Registra tutti i batch previsti prima di chiudere RoboQbo.")
         elif batch_da_lavorare.exists():
             messages.error(request, "Ci sono ancora batch da lavorare o sospesi in questa produzione.")
-        elif batch_da_assegnare.exists():
+        elif not settings.NC_DOCUMENTALI and batch_da_assegnare.exists():
             messages.error(request, "Tutti i batch devono essere collegati a un tank.")
-        elif produzione.tank.filter(annullato=False, data_ora_controlli__isnull=True).exists():
+        elif not settings.NC_DOCUMENTALI and produzione.tank.filter(annullato=False, data_ora_controlli__isnull=True).exists():
             messages.error(request, "Registra pH e °Brix di tutti i tank.")
         else:
             produzione.fase = Produzione.Fase.INVASETTAMENTO
@@ -2438,7 +2476,7 @@ def gestione_produzione(request, pk):
                 "fase", "stato_roboqubo", "roboqubo_chiuso_il",
                 "invasettamento_congelato", "stato_invasettamento",
             ])
-            if nc_aperte.exists():
+            if nc_aperte.exists() and not settings.NC_DOCUMENTALI:
                 messages.warning(
                     request,
                     "Fase RoboQbo conclusa. La NC resta aperta e prosegue separatamente "

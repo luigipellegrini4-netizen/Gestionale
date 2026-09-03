@@ -1,0 +1,12 @@
+{% extends "magazzino/base.html" %}
+{% load static %}
+{% block title %}Postazioni Marmellate{% endblock %}
+{% block body_class %}operator-mode{% endblock %}
+{% block extra_head %}{% include "produzione_v2/_operatori_stile.html" %}{% endblock %}
+{% block content %}
+<div class="operator-shell">
+  <div class="operator-hero"><div><span class="operator-kicker">LINEA MARMELLATE</span><h1>Scegli la tua postazione</h1><p>Vedrai soltanto le lavorazioni e le azioni che riguardano il tuo ruolo.</p></div><a class="operator-link-muted" href="{% url 'produzione_v2:dashboard' %}">Vista responsabile</a></div>
+  <div class="role-grid">{% for postazione in postazioni %}<a class="role-card role-{{ postazione.colore }}" href="{% url 'produzione_v2:postazione_operatore' postazione.sigla|lower %}"><span class="role-letter">{{ postazione.sigla }}</span><span class="role-copy"><strong>{{ postazione.nome }}</strong><small>{{ postazione.descrizione }}</small></span><span class="role-arrow" aria-hidden="true">→</span></a>{% endfor %}</div>
+  <div class="operator-note"><strong>Confezionamento:</strong> sarà aggiunto quando avremo definito insieme il suo flusso operativo.</div>
+</div>
+{% endblock %}

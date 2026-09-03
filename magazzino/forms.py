@@ -1,4 +1,6 @@
 from django import forms
+from django.conf import settings
+from django.utils import timezone
 from django.db.models import Q
 
 from .models import (
@@ -577,6 +579,10 @@ class AperturaNonConformitaLottoForm(forms.Form):
     def __init__(self, *args, lotto, **kwargs):
         super().__init__(*args, **kwargs)
         self.lotto = lotto
+        self.documentale = settings.NC_DOCUMENTALI
+        if self.documentale:
+            self.fields["giacenza"].label = "Posizione interessata (nessun trasferimento)"
+            self.fields["numero_uda"].label = "Numero di UDA interessate (solo annotazione)"
         self.fields["giacenza"].queryset = (
             Giacenza.objects.filter(lotto=lotto, quantita__gt=0)
             .select_related("ubicazione")
@@ -677,6 +683,7 @@ class GestioneNonConformitaLottoForm(forms.Form):
     def __init__(self, *args, non_conformita, **kwargs):
         super().__init__(*args, **kwargs)
         self.non_conformita = non_conformita
+        self.documentale = settings.NC_DOCUMENTALI
         unita_nc = non_conformita.unita_quarantena or (
             "UDA" if non_conformita.numero_uda_quarantena else
             non_conformita.lotto.articolo.unita_misura if non_conformita.lotto_id else ""
@@ -692,7 +699,7 @@ class GestioneNonConformitaLottoForm(forms.Form):
         self.righe_materiali = []
         self.campo_esito_batch = None
         self.mostra_scadenza_materiali = not non_conformita.produzioni_bloccate.exists()
-        if non_conformita.batch_id:
+        if non_conformita.batch_id and not settings.NC_DOCUMENTALI:
             self.fields["esito_batch"] = forms.ChoiceField(
                 required=False,
                 label=f"Decisione sul batch {non_conformita.batch.numero}",
@@ -754,6 +761,7 @@ class GestioneNonConformitaLottoForm(forms.Form):
         reintegrate = cleaned_data.get("quantita_reintegrata")
         if (
             self.data.get("azione") == "chiudi"
+            and not settings.NC_DOCUMENTALI
             and self.non_conformita.quantita_quarantena
         ):
             if scartate is None or reintegrate is None:
@@ -774,7 +782,7 @@ class GestioneNonConformitaLottoForm(forms.Form):
                 if scartate != scartate.to_integral_value() or reintegrate != reintegrate.to_integral_value():
                     raise forms.ValidationError("Le quantità espresse in UDA devono essere numeri interi.")
         if self.data.get("azione") == "chiudi":
-            if self.non_conformita.batch_id and not cleaned_data.get("esito_batch"):
+            if self.non_conformita.batch_id and not settings.NC_DOCUMENTALI and not cleaned_data.get("esito_batch"):
                 self.add_error("esito_batch", "Indicare la decisione sul batch non conforme.")
             obbligatori = {
                 "analisi_cause": "Compilare l'analisi delle cause.",
@@ -833,6 +841,7 @@ class AperturaNonConformitaGeneraleForm(forms.ModelForm):
         fields = [
             "ambito", "tipo_nc", "ricerca_lotto", "lotto", "giacenza",
             "unita_quarantena", "quantita_quarantena_input", "motivo", "note_apertura",
+            "produzione", "batch",
         ]
         labels = {
             "ambito": "Segnalata in",
@@ -847,8 +856,18 @@ class AperturaNonConformitaGeneraleForm(forms.ModelForm):
         }
 
     def __init__(self, *args, **kwargs):
+        self.bozza = kwargs.pop("bozza", False)
         super().__init__(*args, **kwargs)
-        lotto_id = self.data.get("lotto") if self.is_bound else None
+        if self.bozza:
+            self.fields["motivo"].required = False
+        lotto_id = self.data.get("lotto") if self.is_bound else self.instance.lotto_id
+        self.documentale = settings.NC_DOCUMENTALI
+        self.fields["produzione"].required = False
+        self.fields["batch"].required = False
+        if self.documentale:
+            self.fields["giacenza"].label = "Posizione coinvolta (nessun trasferimento)"
+            self.fields["quantita_quarantena_input"].label = "Quantità interessata (solo annotazione)"
+            self.fields["unita_quarantena"].label = "Unità della quantità interessata"
         if lotto_id and str(lotto_id).isdigit():
             self.fields["lotto"].queryset = Lotto.objects.filter(pk=lotto_id)
             self.fields["giacenza"].queryset = (
@@ -863,6 +882,13 @@ class AperturaNonConformitaGeneraleForm(forms.ModelForm):
         giacenza = cleaned_data.get("giacenza")
         unita = cleaned_data.get("unita_quarantena")
         quantita_input = cleaned_data.get("quantita_quarantena_input")
+        produzione = cleaned_data.get("produzione")
+        batch = cleaned_data.get("batch")
+        if batch:
+            if produzione and batch.produzione_id != produzione.pk:
+                self.add_error("batch", "Il batch non appartiene alla produzione selezionata.")
+            else:
+                cleaned_data["produzione"] = batch.produzione
         if lotto and (unita or quantita_input):
             if giacenza is None or not unita or quantita_input is None:
                 raise forms.ValidationError(
@@ -1101,8 +1127,9 @@ class ProduzioneForm(forms.Form):
 
     data_produzione = forms.DateField(
         label="Data di inizio produzione",
-        initial=date.today,
+        initial=timezone.localdate,
         widget=forms.DateInput(
+            format="%Y-%m-%d",
             attrs={
                 "type": "date",
             },
@@ -1204,6 +1231,11 @@ class ControlloTankForm(forms.Form):
 
 
 class BatchProduzioneForm(forms.Form):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if settings.NC_DOCUMENTALI:
+            self.fields.pop("produzione_puo_proseguire", None)
+
     ora_inizio = forms.TimeField(
         required=False, label="Ora inizio",
         help_text="Facoltativa soltanto se il batch è non conforme.",
@@ -1242,7 +1274,7 @@ class BatchProduzioneForm(forms.Form):
             )
         if inizio and fine and fine < inizio:
             raise forms.ValidationError("L'ora di fine non può precedere l'ora di inizio.")
-        if dati.get("esito_conformita") == "NC" and not dati.get("produzione_puo_proseguire"):
+        if not settings.NC_DOCUMENTALI and dati.get("esito_conformita") == "NC" and not dati.get("produzione_puo_proseguire"):
             self.add_error(
                 "produzione_puo_proseguire",
                 "Indicare se la produzione può proseguire.",

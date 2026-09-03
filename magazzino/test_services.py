@@ -4,7 +4,7 @@ from decimal import Decimal
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
 from django.db import IntegrityError, transaction
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
@@ -238,6 +238,7 @@ class OperazioniMagazzinoTests(TestCase):
         self.assertEqual(altra_giacenza.quantita, Decimal("6"))
         self.assertEqual(prelievi[0].lotto, altro_lotto)
 
+    @override_settings(NC_DOCUMENTALI=False)
     def test_non_conformita_parziale_quarantena_e_reintegro(self):
         non_conformita = apri_non_conformita_lotto(
             lotto=self.lotto,
@@ -287,6 +288,7 @@ class OperazioniMagazzinoTests(TestCase):
             ).exists()
         )
 
+    @override_settings(NC_DOCUMENTALI=False)
     def test_non_conformita_rifiuta_decisione_con_totale_uda_errato(self):
         non_conformita = apri_non_conformita_lotto(
             lotto=self.lotto,
@@ -304,6 +306,25 @@ class OperazioniMagazzinoTests(TestCase):
                 decisione="Decisione incompleta",
                 responsabile=self.operatore,
             )
+
+    @override_settings(NC_DOCUMENTALI=True)
+    def test_nc_documentale_non_movimenta_magazzino(self):
+        movimenti = Movimento.objects.count()
+        nc = apri_non_conformita_lotto(
+            lotto=self.lotto, giacenza=self.giacenza, numero_uda=3,
+            motivo="Verifica", operatore=self.operatore,
+        )
+        self.giacenza.refresh_from_db()
+        self.assertEqual(self.giacenza.quantita, Decimal("10"))
+        gestisci_non_conformita_lotto(
+            non_conformita=nc, numero_uda_scartate=0, numero_uda_reintegrate=0,
+            decisione="Movimenti manuali", responsabile=self.operatore,
+        )
+        self.giacenza.refresh_from_db()
+        nc.refresh_from_db()
+        self.assertEqual(self.giacenza.quantita, Decimal("10"))
+        self.assertEqual(nc.stato, NonConformitaLotto.Stato.CHIUSA)
+        self.assertEqual(Movimento.objects.count(), movimenti)
 
     def test_carico_lotto_crea_posizione_scaffale_e_piano(self):
         lotto, movimento = registra_carico_lotto(

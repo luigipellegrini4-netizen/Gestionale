@@ -1,0 +1,17 @@
+{% extends "magazzino/base.html" %}
+{% load static %}
+{% block title %}Postazione {{ postazione.sigla }}{% endblock %}
+{% block body_class %}operator-mode{% endblock %}
+{% block extra_head %}{% include "produzione_v2/_operatori_stile.html" %}{% endblock %}
+{% block content %}
+<div class="operator-shell">
+  <div class="operator-hero compact"><div><a class="operator-back" href="{% url 'produzione_v2:postazioni' %}">← Cambia postazione</a><span class="operator-kicker">OPERATORE {{ postazione.sigla }}</span><h1>{{ postazione.nome }}</h1><p>{{ postazione.descrizione }}</p></div><div class="role-letter role-{{ postazione.colore }}">{{ postazione.sigla }}</div></div>
+  <div class="work-summary"><strong>{{ fasi|length }}</strong><span>lavorazioni presenti</span><span class="live-dot"></span><span>Aggiornato ora</span></div>
+  {% for fase in fasi %}<article class="work-card {% if fase.stato == 'IN_CORSO' %}is-active{% elif fase.eseguibile %}is-ready{% endif %}"><header><div><span class="work-order">{{ fase.ordine.codice }}</span><h2>{{ fase.ordine.prodotto.nome_per_produzione }}</h2></div><span class="status-pill status-{{ fase.stato|lower }}">{{ fase.get_stato_display }}</span></header>
+    <div class="work-grid"><div><small>OPERAZIONE</small><strong>{{ fase.stazione.nome }}</strong></div><div><small>QUANTITÀ ORDINE</small><strong>{{ fase.ordine.quantita_pianificata }} {{ fase.ordine.prodotto.unita_misura }}</strong></div><div><small>DATA</small><strong>{{ fase.ordine.pianificato_per|date:"d/m/Y"|default:"Non pianificata" }}</strong></div><div><small>UNITÀ PRONTE</small><strong>{{ fase.unita_pronte|length }}</strong></div></div>
+    {% if fase.unita.all %}<div class="unit-strip">{% for unita in fase.unita.all %}<span><b>{{ unita.codice }}</b> · {{ unita.get_stato_display }}{% if unita.quantita != None %} · {{ unita.quantita }}{% endif %}</span>{% endfor %}</div>{% endif %}
+    {% if ruolo == "b" %}<p><a class="operator-primary" href="{% url 'produzione_v2:lavorazione_roboqbo' fase.ordine_id %}">Apri procedura guidata RoboQbo</a></p>{% endif %}
+    <footer><div class="next-action"><small>PROSSIMO PASSO</small><strong>{% if fase.stato == "IN_CORSO" %}Continua la lavorazione{% elif fase.ordine.stato == "PRONTO" %}L’ordine è pronto: deve essere avviato{% elif fase.eseguibile %}La lavorazione può iniziare{% elif fase.stato == "COMPLETATA" %}Lavorazione terminata{% else %}Attendi il materiale dalla stazione precedente{% endif %}</strong></div>{% if fase.stato == "DA_AVVIARE" and fase.eseguibile %}<form method="post" action="{% url 'produzione_v2:dettaglio_ordine' fase.ordine_id %}">{% csrf_token %}<input type="hidden" name="azione" value="avvia_fase"><input type="hidden" name="fase_id" value="{{ fase.pk }}"><button class="operator-primary" type="submit">Inizia lavorazione</button></form>{% elif fase.stato == "IN_CORSO" %}<a class="operator-primary" href="{% url 'produzione_v2:dettaglio_ordine' fase.ordine_id %}#fase-{{ fase.pk }}">Apri lavorazione</a>{% else %}<a class="operator-secondary" href="{% url 'produzione_v2:dettaglio_ordine' fase.ordine_id %}#fase-{{ fase.pk }}">Vedi dettagli</a>{% endif %}</footer>
+  </article>{% empty %}<div class="empty-work"><span>✓</span><h2>Nessuna lavorazione da mostrare</h2><p>Al momento non ci sono ordini attivi per questa postazione.</p></div>{% endfor %}
+</div>
+{% endblock %}

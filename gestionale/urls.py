@@ -41,4 +41,8 @@ urlpatterns = [
         "magazzino/",
         include("magazzino.urls"),
     ),
+    path(
+        "produzione-v2/",
+        include("produzione_v2.urls"),
+    ),
 ]
